@@ -21,17 +21,18 @@ META_COLS = ["레벨", "학교", "이름", "연락처", "연락(이메일/카톡
 
 # =========================
 # 폰트 등록 (나눔고딕)
+#  - fonts/ 폴더에 폰트 파일이 있는 버전
 # =========================
 @st.cache_resource
 def register_nanum():
-    reg_path = "assets/fonts/NanumGothic.ttf"
-    bold_path = "assets/fonts/NanumGothicBold.ttf"
+    reg_path = "fonts/NanumGothic-Regular.ttf"
+    bold_path = "fonts/NanumGothicBold.ttf"
 
     if not os.path.exists(reg_path) or not os.path.exists(bold_path):
         raise FileNotFoundError(
             "폰트 파일을 찾지 못했습니다.\n"
-            "assets/fonts/NanumGothic.ttf\n"
-            "assets/fonts/NanumGothicBold.ttf\n"
+            "fonts/NanumGothic-Regular.ttf\n"
+            "fonts/NanumGothicBold.ttf\n"
             "위 경로에 파일이 있는지 확인하세요."
         )
 
@@ -337,12 +338,18 @@ quiz_rows, mock_rows, hw_avg, meta = build_onepage_rows(df, student)
 c1, c2 = st.columns(2)
 with c1:
     st.subheader("Quiz 미리보기")
-    st.dataframe(pd.DataFrame([{"Quiz":r["label"], "점수":r["student"], "class 평균":r["avg"]} for r in quiz_rows]),
-                 use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame([{"Quiz": r["label"], "점수": r["student"], "class 평균": r["avg"]} for r in quiz_rows]),
+        use_container_width=True,
+        hide_index=True
+    )
 with c2:
     st.subheader("Mocktest(점수 예상) 미리보기")
-    st.dataframe(pd.DataFrame([{"Mocktest":r["label"], "점수":r["student"], "class 평균":r["avg"]} for r in mock_rows]),
-                 use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame([{"Mocktest": r["label"], "점수": r["student"], "class 평균": r["avg"]} for r in mock_rows]),
+        use_container_width=True,
+        hide_index=True
+    )
 
 st.subheader("Homework")
 st.write("평균:", ("데이터 없음" if hw_avg is None else f"{hw_avg:.0f}%"))
@@ -352,4 +359,3 @@ pdf_bytes = make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, unit
 filename = f"{class_name}_{meta.get('이름','학생')}_report.pdf"
 
 st.download_button("PDF 다운로드", data=pdf_bytes, file_name=filename, mime="application/pdf")
-

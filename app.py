@@ -44,7 +44,7 @@ def load_fonts():
     def f(path, size):
         return ImageFont.truetype(path, size=size)
 
-    # ✅ A5용: 전체적으로 폰트 크기 축소
+    # A5용 폰트 크기
     return {
         "title": f(bold_path, 26),
         "h2": f(bold_path, 15),
@@ -207,7 +207,7 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
 
 
 # =========================================================
-# PNG 렌더링 (PIL) - A5 사이즈로 조정 + 화면 꽉차게
+# PNG 렌더링 (PIL) - A5
 # =========================================================
 def fmt_num(v):
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -235,16 +235,10 @@ def right_text(draw, rx, y, text, font, fill="#111111"):
 
 
 def draw_wrapped_title(draw, x, y, max_w, class_name, student_name, fonts):
-    """
-    타이틀이 길면 자동 2줄로:
-    1) "{class} {student}"
-    2) "CLASS REPORT"
-    짧으면 한 줄로: "{class} {student} CLASS REPORT"
-    """
     one_line = f"{class_name} {student_name} CLASS REPORT"
     if draw.textlength(one_line, font=fonts["title"]) <= max_w:
         draw_text(draw, x, y, one_line, fonts["title"], fill="#111111")
-        return y + 44  # 다음 y
+        return y + 44
     else:
         line1 = f"{class_name} {student_name}"
         line2 = "CLASS REPORT"
@@ -254,7 +248,6 @@ def draw_wrapped_title(draw, x, y, max_w, class_name, student_name, fonts):
 
 
 def render_table(draw, x, y, w, title, rows, fonts):
-    # ✅ A5용: 행높이/간격 축소
     draw_text(draw, x, y, title, fonts["h2"], fill="#111111")
     y += 26
 
@@ -284,10 +277,9 @@ def render_table(draw, x, y, w, title, rows, fonts):
 
 
 def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, hw_progress, units, fonts):
-    # ✅ A5 크기 (A4의 0.707 스케일): 877 x 1240 정도
-    W, H = 877, 1240
-    margin = 36  # 여백 축소
-    gap = 28     # 컬럼 간격 축소
+    W, H = 877, 1240  # A5 비율
+    margin = 36
+    gap = 28
 
     img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
@@ -300,25 +292,17 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     draw_line(draw, margin, H - 60, W - margin, H - 60, color="#D9D9D9", w=2)
     draw_text(draw, margin, H - 44, FOOTER_TEXT, fonts["tiny"], fill="#444444")
 
-    # Title (자동 줄바꿈)
+    # Title
     y = 66
-    y = draw_wrapped_title(
-        draw=draw,
-        x=margin,
-        y=y,
-        max_w=W - 2 * margin,
-        class_name=class_name,
-        student_name=student_name,
-        fonts=fonts
-    )
+    y = draw_wrapped_title(draw, margin, y, W - 2 * margin, class_name, student_name, fonts)
 
-    # Class / Student 라인 (원하면 여기 2줄 삭제 가능)
+    # Class / Student (원하면 지울 수 있음)
     draw_text(draw, margin, y, f"Class: {class_name}", fonts["r"], fill="#333333")
     y += 22
     draw_text(draw, margin, y, f"Student: {student_name}", fonts["r"], fill="#333333")
     y += 28
 
-    # 2 columns tables (A5에 맞게 폭/간격 재계산)
+    # 2 columns
     total_w = (W - 2 * margin - gap)
     left_w = total_w // 2
     right_w = total_w - left_w
@@ -327,10 +311,9 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     right_x = margin + left_w + gap
     top_y = y
 
-    # Quiz table
     y_left_end = render_table(draw, left_x, top_y, left_w, "Quiz", quiz_rows, fonts)
 
-    # Homework 진행도 (퀴즈 밑)
+    # Homework 진행도
     y_hw = y_left_end + 10
     draw_text(draw, left_x, y_hw, "Homework 진행도", fonts["h2"], fill="#111111")
     y_hw += 26
@@ -342,24 +325,21 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     hw_txt = "데이터 없음" if hw_progress is None else f"{hw_progress:.0f}%"
     draw_text(draw, left_x + 12, y_hw + 7, hw_txt, fonts["b"], fill="#111111")
 
-    # Mock table
     y_right_end = render_table(draw, right_x, top_y, right_w, "Mocktest (점수 예상)", mock_rows, fonts)
 
     y_next = max(y_hw + badge_h, y_right_end) + 18
 
-    # Units box - 남는 공간까지 최대한 사용(“꽉차게”)
+    # Units box - 바닥까지 꽉차게
     draw_text(draw, margin, y_next, "보강필요한 부분", fonts["h2"], fill="#111111")
     y_next += 28
 
     unit_txt = ", ".join(units) if units else "선택 없음"
-
-    # ✅ 아래 푸터(60px)와 약간의 바닥 여백(14px) 제외한 만큼 박스 높이 자동 계산
     bottom_limit = H - 60 - 14
-    box_h = max(120, bottom_limit - y_next)  # 최소 120 보장
+    box_h = max(120, bottom_limit - y_next)
+
     draw.rounded_rectangle([margin, y_next, W - margin, y_next + box_h],
                            radius=16, fill="#F9FAFB", outline=None)
 
-    # wrap text
     max_width = (W - 2 * margin) - 24
     words = unit_txt.split(" ")
     lines = []
@@ -442,7 +422,6 @@ if "units_by_student" not in st.session_state:
 
 units_by_student = st.session_state["units_by_student"]
 
-# 학생 목록 변경 시 보정
 for s in students:
     units_by_student.setdefault(s, [])
 for s in list(units_by_student.keys()):
@@ -466,7 +445,9 @@ st.divider()
 if st.button("학생별 PNG 생성 → ZIP 만들기"):
     png_files = {}
     errors = []
-    previews = []
+
+    preview_student = None
+    preview_img = None
 
     for s in students:
         try:
@@ -480,11 +461,13 @@ if st.button("학생별 PNG 생성 → ZIP 만들기"):
                 units=units_by_student.get(s, []),
                 fonts=fonts,
             )
-            png_bytes = pil_to_png_bytes(img)
-            png_files[f"{safe_filename(s)}.png"] = png_bytes
 
-            if len(previews) < 2:
-                previews.append((s, img))
+            png_files[f"{safe_filename(s)}.png"] = pil_to_png_bytes(img)
+
+            # ✅ 미리보기는 첫 1명만 저장
+            if preview_img is None:
+                preview_student = s
+                preview_img = img
 
         except Exception as e:
             errors.append(f"{s}: {e}")
@@ -494,11 +477,8 @@ if st.button("학생별 PNG 생성 → ZIP 만들기"):
 
     if png_files:
         zip_bytes = make_zip_of_pngs(png_files)
-        st.success(f"완료! 총 {len(png_files)}명의 PNG(A5)를 ZIP으로 만들었습니다.")
 
-        for name, im in previews:
-            st.image(im, caption=f"미리보기(A5): {name}", use_container_width=True)
-
+        # ✅ ZIP 다운로드 버튼을 먼저
         zip_name = f"{safe_filename(class_name)}_reports_A5.zip"
         st.download_button(
             "ZIP 다운로드 (학생별 PNG A5)",
@@ -506,3 +486,9 @@ if st.button("학생별 PNG 생성 → ZIP 만들기"):
             file_name=zip_name,
             mime="application/zip",
         )
+
+        st.success(f"완료! 총 {len(png_files)}명의 PNG(A5)를 ZIP으로 만들었습니다.")
+
+        # ✅ 미리보기는 1명만, 아래에
+        if preview_img is not None:
+            st.image(preview_img, caption=f"미리보기(A5): {preview_student}", use_container_width=True)

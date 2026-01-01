@@ -4,28 +4,33 @@ import re
 import pandas as pd
 import streamlit as st
 
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import mm
-from reportlab.lib import colors
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from PIL import Image, ImageDraw, ImageFont
 
 
 # =========================================================
-# 1) 고정 머릿말/꼬릿말
+# 고정 머릿말/꼬릿말
 # =========================================================
 HEADER_TEXT = "YOU, GENIUS 유지니어스 MATH with 유진쌤"
 FOOTER_TEXT = "Kakaotalk : yujinj524 / Phone : 010-6395-8733"
 
+REPORT_TITLE = "트리플 유진쌤 MATH CLASS REPORT"
+
+# 보강 단원(요청 6개)
+UNIT_OPTIONS = [
+    "I. Linear",
+    "IV. Quadratic",
+    "V. Exponential",
+    "VI. Polynomials, radical and rational functions",
+    "VII. Geometry",
+    "VIII. Statistics",
+]
+
 
 # =========================================================
-# 2) 폰트 등록 (나눔고딕) - fonts/ 폴더
-#    fonts/NanumGothic-Regular.ttf
-#    fonts/NanumGothic-Bold.ttf   ✅ (Bold 파일명 변경)
+# 폰트 로드 (PIL용) - fonts/ 폴더
 # =========================================================
 @st.cache_resource
-def register_nanum():
+def load_fonts():
     reg_path = "fonts/NanumGothic-Regular.ttf"
     bold_path = "fonts/NanumGothic-Bold.ttf"
 
@@ -38,22 +43,26 @@ def register_nanum():
             "GitHub 레포에 fonts 폴더를 만들고 폰트 파일을 올려주세요."
         )
 
-    # 중복 등록 방지
-    try:
-        pdfmetrics.getFont("NG")
-        pdfmetrics.getFont("NGB")
-    except KeyError:
-        pdfmetrics.registerFont(TTFont("NG", reg_path))
-        pdfmetrics.registerFont(TTFont("NGB", bold_path))
+    def f(path, size):
+        return ImageFont.truetype(path, size=size)
 
-    return "NG", "NGB"
+    fonts = {
+        "title": f(bold_path, 36),
+        "h1": f(bold_path, 24),
+        "h2": f(bold_path, 18),
+        "b": f(bold_path, 16),
+        "r": f(reg_path, 16),
+        "small_b": f(bold_path, 14),
+        "small": f(reg_path, 14),
+        "tiny": f(reg_path, 12),
+    }
+    return fonts
 
 
 # =========================================================
-# 3) 엑셀 파싱 (서브헤더 결합 + '이름' 중복 문제 방지)
+# 엑셀 파싱 (서브헤더 결합 + '이름' 중복 문제 방지)
 # =========================================================
 def make_unique(colnames):
-    """중복 컬럼명이 있으면 __dup2, __dup3 ... 붙여서 유니크하게"""
     seen = {}
     out = []
     for c in colnames:
@@ -127,7 +136,7 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
 
 
 # =========================================================
-# 4) 점수 컬럼 탐지
+# 점수 컬럼 탐지
 # =========================================================
 def quiz_score_cols(df):
     return [c for c in df.columns if re.match(r"^(QUIZ\d+.*|ReviewQuiz.*)__점수$", str(c))]
@@ -143,7 +152,7 @@ def pretty(label: str) -> str:
 
 
 # =========================================================
-# 5) 평균행(1개) 찾기
+# 평균행(1개) 찾기
 # =========================================================
 def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
     best_idx = None
@@ -165,7 +174,7 @@ def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
 
 
 # =========================================================
-# 6) 학생 1명 데이터 추출
+# 학생 1명 데이터 추출 (level/school 제거)
 # =========================================================
 def build_onepage_rows(df: pd.DataFrame, student_name: str):
     qcols = quiz_score_cols(df)
@@ -200,187 +209,206 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
             "avg": avg_row[c],
         })
 
-    hw_avg = None
+    # Homework 진행도(평균)
+    hw_progress = None
     if hcols:
         vals = s_row[hcols].dropna()
         if len(vals) > 0:
-            hw_avg = float(vals.mean())
+            hw_progress = float(vals.mean())
 
-    meta = {
-        "이름": s_row.get("이름", ""),
-        "레벨": s_row.get("레벨", ""),
-        "학교": s_row.get("학교", ""),
-    }
+            # 0~1 비율로 들어온 경우 대비
+            if hw_progress <= 1.0:
+                hw_progress *= 100.0
 
-    return quiz_rows, mock_rows, hw_avg, meta
+    meta = {"이름": s_row.get("이름", "")}
+    return quiz_rows, mock_rows, hw_progress, meta
 
 
 # =========================================================
-# 7) PDF 그리기 (깔끔 + 가독성 + 헤더/푸터)
+# PNG 렌더링 (PIL)
 # =========================================================
-def draw_header_footer(c: canvas.Canvas, W, H, margin, fontR, fontB, page_num: int):
-    # Header
-    c.setFont(fontB, 11)
-    c.setFillColor(colors.HexColor("#111111"))
-    c.drawString(margin, H - margin + 2*mm, HEADER_TEXT)
+def draw_line(draw, x1, y1, x2, y2, color="#D9D9D9", w=2):
+    draw.line((x1, y1, x2, y2), fill=color, width=w)
 
-    c.setStrokeColor(colors.HexColor("#D9D9D9"))
-    c.setLineWidth(0.6)
-    c.line(margin, H - margin - 2*mm, W - margin, H - margin - 2*mm)
+def draw_text(draw, x, y, text, font, fill="#111111"):
+    draw.text((x, y), text, font=font, fill=fill)
 
-    # Footer line
-    c.line(margin, margin + 10*mm, W - margin, margin + 10*mm)
+def fmt_num(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    try:
+        # 정수면 정수로, 아니면 불필요 소수 제거
+        fv = float(v)
+        if abs(fv - round(fv)) < 1e-9:
+            return str(int(round(fv)))
+        return f"{fv:g}"
+    except Exception:
+        return str(v)
 
-    # Footer text
-    c.setFont(fontR, 9.5)
-    c.setFillColor(colors.HexColor("#444444"))
-    c.drawString(margin, margin + 5*mm, FOOTER_TEXT)
-    c.drawRightString(W - margin, margin + 5*mm, f"{page_num}")
+def render_table(draw, x, y, w, title, rows, fonts):
+    """
+    간단한 표: 제목 + 헤더 + 행들
+    columns: label / score / avg
+    """
+    # title
+    draw_text(draw, x, y, title, fonts["h2"])
+    y += 34
 
-    c.setFillColor(colors.black)
+    row_h = 34
+    col1 = int(w * 0.52)
+    col2 = int(w * 0.24)
+    col3 = w - col1 - col2
 
+    # header bg
+    draw.rectangle([x, y, x + w, y + row_h], fill="#F5F6F8", outline=None)
+    draw_text(draw, x + col1 + col2 - 10, y + 7, "점수", fonts["small_b"], fill="#333333")
+    draw_text(draw, x + w - 10, y + 7, "class 평균", fonts["small_b"], fill="#333333")
+    draw_text(draw, x + col1 + col2 - 10, y + 7, "점수", fonts["small_b"], fill="#333333")
 
-def draw_table_clean(c, x, y_top, w, title, rows, fontR, fontB):
-    row_h = 7.2 * mm
-    col_w = [w * 0.52, w * 0.24, w * 0.24]
+    # right align helper by measuring text width
+    def right(draw, rx, ty, text, font, fill="#111111"):
+        tw = draw.textlength(text, font=font)
+        draw.text((rx - tw, ty), text, font=font, fill=fill)
 
-    c.setFont(fontB, 11)
-    c.setFillColor(colors.HexColor("#111111"))
-    c.drawString(x, y_top, title)
-    y = y_top - 6*mm
-
-    # header background
-    c.setFillColor(colors.HexColor("#F5F6F8"))
-    c.rect(x, y - row_h, w, row_h, stroke=0, fill=1)
-    c.setFillColor(colors.HexColor("#333333"))
-    c.setFont(fontB, 9.8)
-    c.drawRightString(x + col_w[0] + col_w[1] - 2*mm, y - row_h + 2.2*mm, "점수")
-    c.drawRightString(x + w - 2*mm, y - row_h + 2.2*mm, "class 평균")
-
-    c.setStrokeColor(colors.HexColor("#E1E4E8"))
-    c.setLineWidth(0.7)
-    c.line(x, y - row_h, x + w, y - row_h)
-    y -= row_h
+    # header underline
+    draw_line(draw, x, y + row_h, x + w, y + row_h, color="#E1E4E8", w=2)
+    y += row_h
 
     # rows
-    c.setFont(fontR, 9.8)
     for r in rows:
-        c.setFillColor(colors.HexColor("#111111"))
-        c.drawString(x + 2*mm, y - row_h + 2.2*mm, str(r["label"]))
+        label = str(r["label"])
+        sv = fmt_num(r["student"])
+        av = fmt_num(r["avg"])
 
-        sv = "" if pd.isna(r["student"]) else f"{float(r['student']):g}"
-        av = "" if pd.isna(r["avg"]) else f"{float(r['avg']):g}"
+        draw_text(draw, x + 8, y + 7, label, fonts["small"])
+        right(draw, x + col1 + col2 - 10, y + 7, sv, fonts["small"], fill="#111111")
+        right(draw, x + w - 10, y + 7, av, fonts["small"], fill="#666666")
 
-        c.drawRightString(x + col_w[0] + col_w[1] - 2*mm, y - row_h + 2.2*mm, sv)
-        c.setFillColor(colors.HexColor("#666666"))
-        c.drawRightString(x + w - 2*mm, y - row_h + 2.2*mm, av)
+        draw_line(draw, x, y + row_h, x + w, y + row_h, color="#EDEFF2", w=2)
+        y += row_h
 
-        c.setStrokeColor(colors.HexColor("#EDEFF2"))
-        c.setLineWidth(0.6)
-        c.line(x, y - row_h, x + w, y - row_h)
-        y -= row_h
-
-    c.setFillColor(colors.black)
     return y
 
+def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, hw_progress, units, fonts):
+    # A4 느낌(150 dpi 정도) 1240 x 1754
+    W, H = 1240, 1754
+    margin = 60
 
-def make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units) -> bytes:
-    fontR, fontB = register_nanum()
+    img = Image.new("RGB", (W, H), "white")
+    draw = ImageDraw.Draw(img)
 
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    W, H = A4
-    margin = 16 * mm
+    # Header
+    draw_text(draw, margin, 30, HEADER_TEXT, fonts["small_b"], fill="#111111")
+    draw_line(draw, margin, 70, W - margin, 70, color="#D9D9D9", w=2)
 
-    # Header/Footer (page 1)
-    draw_header_footer(c, W, H, margin, fontR, fontB, 1)
-
-    y = H - margin - 12*mm
+    # Footer
+    draw_line(draw, margin, H - 110, W - margin, H - 110, color="#D9D9D9", w=2)
+    draw_text(draw, margin, H - 90, FOOTER_TEXT, fonts["tiny"], fill="#444444")
 
     # Title
-    c.setFont(fontB, 18)
-    c.setFillColor(colors.HexColor("#111111"))
-    c.drawString(margin, y, "성적 요약 리포트")
-    c.setFillColor(colors.black)
+    y = 100
+    draw_text(draw, margin, y, REPORT_TITLE, fonts["title"], fill="#111111")
+    y += 70
 
-    # Student info
-    y -= 10*mm
-    c.setFont(fontR, 11)
-    c.setFillColor(colors.HexColor("#333333"))
-    c.drawString(margin, y, f"Class: {class_name}")
-    y -= 6*mm
-    c.drawString(margin, y, f"Student: {meta.get('이름','')}")
-    y -= 6*mm
-    c.drawString(margin, y, f"Level: {meta.get('레벨','')}")
-    y -= 6*mm
-    c.drawString(margin, y, f"School: {meta.get('학교','')}")
-    c.setFillColor(colors.black)
+    # Class + Student (level/school 제거)
+    draw_text(draw, margin, y, f"Class: {class_name}", fonts["r"], fill="#333333")
+    y += 32
+    draw_text(draw, margin, y, f"Student: {student_name}", fonts["r"], fill="#333333")
+    y += 45
 
-    # Homework badge
-    y -= 10*mm
-    badge_w = 70*mm
-    badge_h = 10*mm
-    c.setFillColor(colors.HexColor("#F5F6F8"))
-    c.roundRect(margin, y - badge_h + 2*mm, badge_w, badge_h, 3*mm, stroke=0, fill=1)
-    c.setFillColor(colors.HexColor("#111111"))
-    c.setFont(fontB, 10.5)
-    hw_txt = "데이터 없음" if hw_avg is None else f"{hw_avg:.0f}%"
-    c.drawString(margin + 3*mm, y - badge_h + 5*mm, f"Homework 평균  {hw_txt}")
-    c.setFillColor(colors.black)
-
-    # Two tables
-    y_tables_top = y - 12*mm
-    gap = 10*mm
-    col_w = (W - 2*margin - gap) / 2
+    # 2 columns tables
+    gap = 50
+    col_w = (W - 2 * margin - gap)
+    left_w = col_w // 2
+    right_w = col_w - left_w
 
     left_x = margin
-    right_x = margin + col_w + gap
+    right_x = margin + left_w + gap
+    top_y = y
 
-    y_left_end = draw_table_clean(c, left_x, y_tables_top, col_w, "Quiz", quiz_rows, fontR, fontB)
-    y_right_end = draw_table_clean(c, right_x, y_tables_top, col_w, "Mocktest (점수 예상)", mock_rows, fontR, fontB)
+    # Quiz table
+    y_left_end = render_table(draw, left_x, top_y, left_w, "Quiz", quiz_rows, fonts)
 
-    y_next = min(y_left_end, y_right_end) - 10*mm
+    # Homework 진행도 (퀴즈 밑으로)
+    y_hw = y_left_end + 18
+    draw_text(draw, left_x, y_hw, "Homework 진행도", fonts["h2"], fill="#111111")
+    y_hw += 34
+
+    # badge
+    badge_w = min(520, left_w)
+    badge_h = 44
+    draw.rounded_rectangle([left_x, y_hw, left_x + badge_w, y_hw + badge_h], radius=16, fill="#F5F6F8", outline=None)
+    hw_txt = "데이터 없음" if hw_progress is None else f"{hw_progress:.0f}%"
+    draw_text(draw, left_x + 16, y_hw + 9, hw_txt, fonts["b"], fill="#111111")
+
+    # Mock table
+    y_right_end = render_table(draw, right_x, top_y, right_w, "Mocktest (점수 예상)", mock_rows, fonts)
+
+    y_next = max(y_hw + badge_h, y_right_end) + 40
 
     # Units box
-    c.setFont(fontB, 12)
-    c.setFillColor(colors.HexColor("#111111"))
-    c.drawString(margin, y_next, "보강필요한 부분")
-    c.setFillColor(colors.black)
+    draw_text(draw, margin, y_next, "보강필요한 부분", fonts["h2"], fill="#111111")
+    y_next += 40
 
-    y_next -= 7*mm
     unit_txt = ", ".join(units) if units else "선택 없음"
+    box_h = 150
+    draw.rounded_rectangle([margin, y_next, W - margin, y_next + box_h], radius=18, fill="#F9FAFB", outline=None)
 
-    box_h = 22*mm
-    c.setFillColor(colors.HexColor("#F9FAFB"))
-    c.roundRect(margin, y_next - box_h + 2*mm, W - 2*margin, box_h, 3*mm, stroke=0, fill=1)
-    c.setFillColor(colors.HexColor("#111111"))
-    c.setFont(fontR, 10.5)
+    # wrap text
+    max_width = (W - 2 * margin) - 30
+    lines = []
+    words = unit_txt.split(" ")
+    cur = ""
+    for wword in words:
+        test = (cur + " " + wword).strip()
+        if draw.textlength(test, font=fonts["small"]) <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = wword
+    if cur:
+        lines.append(cur)
 
-    max_chars = 110
-    lines = [unit_txt[i:i+max_chars] for i in range(0, len(unit_txt), max_chars)]
-    yy = y_next - 4*mm
-    for line in lines[:3]:
-        c.drawString(margin + 3*mm, yy, line)
-        yy -= 6*mm
+    yy = y_next + 16
+    for line in lines[:4]:
+        draw_text(draw, margin + 16, yy, line, fonts["small"], fill="#111111")
+        yy += 28
 
-    c.showPage()
-    c.save()
-    return buf.getvalue()
+    return img
+
+
+def combine_images_vertical(images, gap=40, bg="white"):
+    if not images:
+        return None
+    w = max(im.size[0] for im in images)
+    total_h = sum(im.size[1] for im in images) + gap * (len(images) - 1)
+    out = Image.new("RGB", (w, total_h), bg)
+    y = 0
+    for im in images:
+        out.paste(im, (0, y))
+        y += im.size[1] + gap
+    return out
+
+
+def pil_to_png_bytes(img: Image.Image) -> bytes:
+    bio = io.BytesIO()
+    img.save(bio, format="PNG")
+    return bio.getvalue()
 
 
 # =========================================================
-# 8) Streamlit UI
+# Streamlit UI
 # =========================================================
-st.set_page_config(page_title="성적표 PDF 생성", layout="wide")
-st.title("엑셀 업로드 → 학생 선택 → PDF 성적표")
+st.set_page_config(page_title="성적표 PNG 생성", layout="wide")
+st.title("엑셀 업로드 → 학생별 보강 선택 → 전체 PNG 다운로드")
+st.caption("학생 전원의 요약 리포트를 PNG로 만들어 한 파일로 내려받습니다. (세로로 길게 이어붙인 이미지)")
 
-st.caption("업로드한 엑셀에서 Quiz/Mocktest/Homework 점수와 반 평균을 자동으로 인식해 1장 PDF로 출력합니다.")
-
-class_name = st.text_input("Class 이름(성적표에 표시)", value="S2 개념반")
+class_name = st.text_input("Class 이름(리포트에 표시)", value="S2 개념반")
 
 uploaded = st.file_uploader("엑셀 업로드(.xlsx)", type=["xlsx"])
 if not uploaded:
-    st.info("엑셀 파일을 업로드하면 학생 목록이 자동으로 나타납니다.")
+    st.info("엑셀 파일을 업로드하면 학생 목록이 나타납니다.")
     st.stop()
 
 try:
@@ -394,47 +422,78 @@ if not students:
     st.error("학생 이름을 찾지 못했습니다. 엑셀에서 C열(이름)에 학생 이름이 들어있는지 확인해주세요.")
     st.stop()
 
-student = st.selectbox("학생 선택", students)
-
-DEFAULT_UNITS = [
-    "Linear equations", "Inequalities", "Functions", "Quadratics",
-    "Polynomials", "Factoring", "Exponents", "Radicals",
-    "Geometry", "Trigonometry", "Word problems"
-]
-units = st.multiselect("보강필요한 부분(드롭다운)", DEFAULT_UNITS)
-
+# 폰트 로드
 try:
-    quiz_rows, mock_rows, hw_avg, meta = build_onepage_rows(df, student)
+    fonts = load_fonts()
 except Exception as e:
-    st.error(f"학생 데이터 처리 실패: {e}")
+    st.error(f"폰트 로드 실패: {e}")
     st.stop()
 
-# 미리보기
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("Quiz 미리보기")
-    st.dataframe(
-        pd.DataFrame([{"Quiz": r["label"], "점수": r["student"], "class 평균": r["avg"]} for r in quiz_rows]),
-        use_container_width=True,
-        hide_index=True
-    )
-with c2:
-    st.subheader("Mocktest(점수 예상) 미리보기")
-    st.dataframe(
-        pd.DataFrame([{"Mocktest": r["label"], "점수": r["student"], "class 평균": r["avg"]} for r in mock_rows]),
-        use_container_width=True,
-        hide_index=True
-    )
+st.subheader("학생별 보강 단원 선택 (한 페이지에서 전원 설정)")
 
-st.subheader("Homework")
-st.write("평균:", ("데이터 없음" if hw_avg is None else f"{hw_avg:.0f}%"))
+# 학생별 units 저장
+if "units_by_student" not in st.session_state:
+    st.session_state["units_by_student"] = {s: [] for s in students}
 
-# PDF 다운로드
-try:
-    pdf_bytes = make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units)
-except Exception as e:
-    st.error(f"PDF 생성 실패: {e}")
-    st.stop()
+units_by_student = st.session_state["units_by_student"]
 
-filename = f"{class_name}_{meta.get('이름','학생')}_report.pdf"
-st.download_button("PDF 다운로드", data=pdf_bytes, file_name=filename, mime="application/pdf")
+# 학생 목록이 바뀌면 dict 보정
+for s in students:
+    units_by_student.setdefault(s, [])
+for s in list(units_by_student.keys()):
+    if s not in students:
+        units_by_student.pop(s, None)
+
+# 한 페이지에서 전원 드롭다운
+for s in students:
+    c1, c2 = st.columns([1, 4])
+    with c1:
+        st.markdown(f"**{s}**")
+    with c2:
+        units_by_student[s] = st.multiselect(
+            label="",
+            options=UNIT_OPTIONS,
+            default=units_by_student[s],
+            key=f"units_{s}",
+        )
+
+st.divider()
+
+# 생성 버튼
+if st.button("전체 PNG 생성하기"):
+    images = []
+    errors = []
+
+    for s in students:
+        try:
+            quiz_rows, mock_rows, hw_progress, meta = build_onepage_rows(df, s)
+            img = render_student_report_image(
+                class_name=class_name,
+                student_name=s,
+                quiz_rows=quiz_rows,
+                mock_rows=mock_rows,
+                hw_progress=hw_progress,
+                units=units_by_student.get(s, []),
+                fonts=fonts,
+            )
+            images.append(img)
+        except Exception as e:
+            errors.append(f"{s}: {e}")
+
+    if errors:
+        st.error("일부 학생 리포트 생성 실패:\n" + "\n".join(errors))
+
+    if images:
+        combined = combine_images_vertical(images, gap=40)
+        png_bytes = pil_to_png_bytes(combined)
+
+        st.success("PNG 생성 완료!")
+        st.image(combined, caption="미리보기(세로로 길게 이어붙인 전체 이미지)", use_container_width=True)
+
+        filename = f"{class_name}_ALL_STUDENTS_REPORT.png"
+        st.download_button(
+            "전체 PNG 다운로드",
+            data=png_bytes,
+            file_name=filename,
+            mime="image/png",
+        )

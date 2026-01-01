@@ -2,9 +2,9 @@ import io
 import os
 import re
 import zipfile
+import numpy as np
 import pandas as pd
 import streamlit as st
-
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -44,7 +44,6 @@ def load_fonts():
     def f(path, size):
         return ImageFont.truetype(path, size=size)
 
-    # 화면에 잘 보이도록 좀 크게
     return {
         "title": f(bold_path, 32),
         "h2": f(bold_path, 19),
@@ -57,12 +56,13 @@ def load_fonts():
 
 
 # =========================================================
-# 엑셀 파싱 (서브헤더 결합 + '이름' 중복 문제 방지)
+# 공통 유틸
 # =========================================================
 def make_unique(colnames):
     seen = {}
     out = []
     for c in colnames:
+        c = str(c)
         if c in seen:
             seen[c] += 1
             out.append(f"{c}__dup{seen[c]}")
@@ -72,12 +72,66 @@ def make_unique(colnames):
     return out
 
 
-def load_and_clean(uploaded_file) -> pd.DataFrame:
+def is_blank(v):
+    return pd.isna(v) or str(v).strip() == ""
+
+
+def normalize_sheet_simple(uploaded_file) -> pd.DataFrame:
+    """
+    ✅ 정리 포맷 (첫 줄=헤더, 둘째 줄 Name='평균')
+    예: S2중급반.xlsx
+    """
+    df = pd.read_excel(uploaded_file, sheet_name=0, engine="openpyxl", header=0)
+
+    # Unnamed 컬럼 정리 (이름 기준으로 주변 컬럼 표준화)
+    cols = list(df.columns)
+    if "이름" not in cols:
+        raise KeyError("엑셀에서 '이름' 컬럼을 찾지 못했습니다.")
+
+    name_idx = cols.index("이름")
+    default_map = {
+        name_idx - 2: "레벨",
+        name_idx - 1: "학교",
+        name_idx + 1: "연락처",
+        name_idx + 2: "연락(이메일/카톡)",
+    }
+
+    new_cols = []
+    for i, c in enumerate(cols):
+        if isinstance(c, str) and c.startswith("Unnamed"):
+            new_cols.append(default_map.get(i, f"빈칸{i}"))
+        else:
+            new_cols.append(c)
+
+    df.columns = make_unique(new_cols)
+
+    # '새로옴' 같은 텍스트는 숫자 칸에서는 NaN으로
+    df = df.replace({"새로옴": np.nan, "NEW": np.nan})
+
+    # 숫자 변환(퀴즈/모의/숙제)
+    for c in df.columns:
+        if isinstance(c, str) and (
+            re.match(r"^QUIZ\d+", c.strip(), re.IGNORECASE)
+            or c.strip().startswith("ReviewQuiz")
+            or (("Mock" in c or "MOCK" in c) and ("점수" in c))
+            or c.strip().startswith("Homework")
+        ):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    return df
+
+
+def normalize_sheet_with_subheader(uploaded_file) -> pd.DataFrame:
+    """
+    ✅ 기존 포맷 (첫 줄 헤더 + 둘째 줄 서브헤더/구분)
+    예: 개념반.xlsx (너가 처음 올린 형태)
+    """
     raw = pd.read_excel(uploaded_file, sheet_name=0, engine="openpyxl")
     sub = raw.iloc[0]
     df = raw.iloc[1:].copy()
     cols = list(raw.columns)
 
+    # 이름 위치 찾기
     idx_name = None
     for i, c in enumerate(cols):
         if str(c).strip() == "이름":
@@ -116,8 +170,10 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
     df.columns = make_unique(new_cols)
     df = df.reset_index(drop=True)
 
+    df = df.replace({"새로옴": np.nan, "NEW": np.nan})
+
     for c in df.columns:
-        if any(k in str(c) for k in ["__점수", "__Total", "__점수 예상", "Homework"]):
+        if any(k in str(c) for k in ["__점수", "__Total", "__점수 예상", "Homework", "QUIZ", "Mock"]):
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
     if "이름" not in df.columns:
@@ -126,44 +182,93 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
     return df
 
 
+def load_and_clean(uploaded_file) -> pd.DataFrame:
+    """
+    ✅ 자동 포맷 감지:
+    - 0행에 '이름' 있고, 1행(이름열)이 '평균'이면 -> 정리 포맷
+    - 아니면 -> 기존 서브헤더 포맷
+    """
+    peek = pd.read_excel(uploaded_file, sheet_name=0, engine="openpyxl", header=None, nrows=2)
+    first = list(peek.iloc[0].values)
+
+    if "이름" in first:
+        name_idx = first.index("이름")
+        second_name = peek.iloc[1, name_idx]
+        if isinstance(second_name, str) and second_name.strip() == "평균":
+            return normalize_sheet_simple(uploaded_file)
+
+    return normalize_sheet_with_subheader(uploaded_file)
+
+
 # =========================================================
-# 점수 컬럼 탐지
+# 점수 컬럼 탐지 (두 포맷 모두 지원)
 # =========================================================
-def quiz_score_cols(df):
-    return [c for c in df.columns if re.match(r"^(QUIZ\d+.*|ReviewQuiz.*)__점수$", str(c))]
+def quiz_score_cols(df: pd.DataFrame):
+    cols = [c for c in df.columns if isinstance(c, str)]
+    if any("__점수" in c for c in cols):
+        return [c for c in cols if re.match(r"^(QUIZ\d+.*|ReviewQuiz.*)__점수$", c)]
+    return [c for c in cols if re.match(r"^(QUIZ\d+|ReviewQuiz)", c.strip(), re.IGNORECASE)]
 
 
-def mock_pred_cols(df):
-    return [c for c in df.columns if re.match(r"^MOCK TEST.*__점수 예상$", str(c))]
+def mock_score_cols(df: pd.DataFrame):
+    cols = [c for c in df.columns if isinstance(c, str)]
+    if any("__점수 예상" in c for c in cols):
+        return [c for c in cols if re.match(r"^MOCK TEST.*__점수 예상$", c)]
+    # 정리 포맷: "Mock1 점수", "Mock2 점수"만 잡고 M1/M2는 제외
+    out = []
+    for c in cols:
+        cc = c.strip()
+        if ("Mock" in cc or "MOCK" in cc) and ("점수" in cc):
+            if ("M1" in cc) or ("M2" in cc):
+                continue
+            out.append(c)
+    return out
 
 
-def homework_cols(df):
-    return [c for c in df.columns if str(c).startswith("Homework")]
+def homework_cols(df: pd.DataFrame):
+    return [c for c in df.columns if isinstance(c, str) and c.strip().startswith("Homework")]
 
 
-def pretty(label: str) -> str:
-    return re.sub(r"\s*\(.*?\)\s*", "", label).strip()
+def format_quiz_label(c: str) -> str:
+    # "QUIZ1(12/22월)" -> "Quiz1"
+    m = re.search(r"(QUIZ\s*\d+)", c, re.IGNORECASE)
+    if m:
+        return m.group(1).replace("QUIZ", "Quiz").replace(" ", "")
+    if c.lower().startswith("reviewquiz"):
+        return "ReviewQuiz"
+    return c
+
+
+def format_mock_label(c: str) -> str:
+    # "Mock1 점수" -> "Mocktest 1"
+    m = re.search(r"Mock\s*(\d+)", c, re.IGNORECASE)
+    if m:
+        return f"Mocktest {m.group(1)}"
+    return c
 
 
 # =========================================================
-# 평균행(1개) 찾기
+# 평균행 찾기 (이름이 비어있거나, '평균'이면 평균행)
 # =========================================================
 def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
     best_idx = None
     best_count = -1
 
     for i in range(len(df)):
-        name = df.loc[i, "이름"]
-        if isinstance(name, str) and name.strip() != "":
+        name = df.loc[i, "이름"] if "이름" in df.columns else None
+        name_str = "" if pd.isna(name) else str(name).strip()
+
+        is_avg_candidate = (name_str == "") or (name_str == "평균")
+        if not is_avg_candidate:
             continue
 
-        cnt = sum(pd.notna(df.loc[i, c]) for c in score_cols)
+        cnt = sum(pd.notna(df.loc[i, c]) for c in score_cols if c in df.columns)
         if cnt > best_count:
             best_count = cnt
             best_idx = i
 
     if best_idx is None or best_count <= 0:
-        raise ValueError("평균행을 찾지 못했습니다. (이름이 비어있고 점수 칼럼에 숫자가 있는 평균행이 필요)")
+        raise ValueError("평균행을 찾지 못했습니다. (이름이 비어있거나 '평균'인 행에 평균값이 있어야 합니다.)")
     return best_idx
 
 
@@ -172,32 +277,29 @@ def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
 # =========================================================
 def build_onepage_rows(df: pd.DataFrame, student_name: str):
     qcols = quiz_score_cols(df)
-    mcols = mock_pred_cols(df)
+    mcols = mock_score_cols(df)
     hcols = homework_cols(df)
     score_cols = list(dict.fromkeys(qcols + mcols))
 
     avg_i = find_class_avg_row(df, score_cols)
     avg_row = df.loc[avg_i]
 
-    s_idx = df.index[df["이름"] == student_name].tolist()
+    s_idx = df.index[df["이름"].astype(str).str.strip() == str(student_name).strip()].tolist()
     if not s_idx:
         raise ValueError(f"학생을 찾을 수 없음: {student_name}")
     s_row = df.loc[s_idx[0]]
 
     quiz_rows = []
     for c in qcols:
-        main = c.split("__")[0]
-        quiz_rows.append({"label": pretty(main).replace("QUIZ", "Quiz"), "student": s_row[c], "avg": avg_row[c]})
+        quiz_rows.append({"label": format_quiz_label(c.split("__")[0]), "student": s_row.get(c), "avg": avg_row.get(c)})
 
     mock_rows = []
     for c in mcols:
-        main = c.split("__")[0]
-        label = pretty(main).replace("MOCK TEST", "Mocktest")
-        mock_rows.append({"label": label, "student": s_row[c], "avg": avg_row[c]})
+        mock_rows.append({"label": format_mock_label(c.split("__")[0]), "student": s_row.get(c), "avg": avg_row.get(c)})
 
     hw_progress = None
     if hcols:
-        vals = s_row[hcols].dropna()
+        vals = pd.to_numeric(s_row[hcols], errors="coerce").dropna()
         if len(vals) > 0:
             hw_progress = float(vals.mean())
             if hw_progress <= 1.0:
@@ -207,7 +309,7 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
 
 
 # =========================================================
-# PNG 렌더링 (PIL) - "세로 자동 크롭" 버전
+# PNG 렌더링 (PIL) - 세로 자동 크롭
 # =========================================================
 def fmt_num(v):
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -235,7 +337,7 @@ def right_text(draw, rx, y, text, font, fill="#111111"):
 
 
 def wrap_text(draw, text, font, max_width):
-    words = text.split(" ")
+    words = str(text).split(" ")
     lines = []
     cur = ""
     for w in words:
@@ -309,7 +411,6 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
 
     h_quiz = table_height(len(quiz_rows), title_gap=30, header_h=ROW_H, row_h=ROW_H)
     h_mock = table_height(len(mock_rows), title_gap=30, header_h=ROW_H, row_h=ROW_H)
-
     h_hw = 30 + 44 + 14
 
     unit_txt = ", ".join(units) if units else "선택 없음"
@@ -407,9 +508,9 @@ def make_zip_of_pngs(png_dict: dict) -> bytes:
 # =========================================================
 st.set_page_config(page_title="유진 SAT CLASS REPORT", layout="wide")
 st.title("유진 SAT CLASS REPORT")
-st.caption("✅ 고정 높이 없이, 보강필요한 부분까지 출력한 뒤 거기서 딱 잘라 PNG로 저장합니다.")
+st.caption("엑셀을 업로드하면 학생별 리포트를 PNG로 만든 뒤 ZIP으로 한 번에 다운로드합니다.")
 
-class_name = st.text_input("Class 이름(리포트에 표시)", value="S2 개념반")
+class_name = st.text_input("Class 이름(리포트에 표시)", value="S2 중급반")
 
 uploaded = st.file_uploader("엑셀 업로드(.xlsx)", type=["xlsx"])
 if not uploaded:
@@ -422,9 +523,17 @@ except Exception as e:
     st.error(f"엑셀 인식 실패: {e}")
     st.stop()
 
-students = sorted([s for s in df["이름"].dropna().unique().tolist() if str(s).strip() != ""])
+if "이름" not in df.columns:
+    st.error("엑셀에서 '이름' 컬럼을 찾지 못했습니다.")
+    st.stop()
+
+students = sorted([
+    s for s in df["이름"].dropna().unique().tolist()
+    if str(s).strip() not in ["", "평균"]
+])
+
 if not students:
-    st.error("학생 이름을 찾지 못했습니다. 엑셀에서 C열(이름)에 학생 이름이 들어있는지 확인해주세요.")
+    st.error("학생 이름을 찾지 못했습니다. '이름' 열에 학생 이름이 있는지 확인해주세요.")
     st.stop()
 
 try:
@@ -493,7 +602,7 @@ if st.button("학생별 PNG 생성 → ZIP 만들기"):
     if png_files:
         zip_bytes = make_zip_of_pngs(png_files)
 
-        zip_name = f"{safe_filename(class_name)}_reports_autoCrop.zip"
+        zip_name = f"{safe_filename(class_name)}_reports.zip"
         st.download_button(
             "ZIP 다운로드 (학생별 PNG)",
             data=zip_bytes,

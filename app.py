@@ -22,7 +22,7 @@ FOOTER_TEXT = "Kakaotalk : yujinj524 / Phone : 010-6395-8733"
 # =========================================================
 # 2) 폰트 등록 (나눔고딕) - fonts/ 폴더
 #    fonts/NanumGothic-Regular.ttf
-#    fonts/NanumGothic-Bold.ttf
+#    fonts/NanumGothic-Bold.ttf   ✅ (Bold 파일명 변경)
 # =========================================================
 @st.cache_resource
 def register_nanum():
@@ -38,6 +38,7 @@ def register_nanum():
             "GitHub 레포에 fonts 폴더를 만들고 폰트 파일을 올려주세요."
         )
 
+    # 중복 등록 방지
     try:
         pdfmetrics.getFont("NG")
         pdfmetrics.getFont("NGB")
@@ -49,8 +50,7 @@ def register_nanum():
 
 
 # =========================================================
-# 3) 엑셀 파싱: 서브헤더(점수/틀린문제/점수 예상) 합치기
-#    + "이름" 중복 컬럼 문제 해결
+# 3) 엑셀 파싱 (서브헤더 결합 + '이름' 중복 문제 방지)
 # =========================================================
 def make_unique(colnames):
     """중복 컬럼명이 있으면 __dup2, __dup3 ... 붙여서 유니크하게"""
@@ -69,21 +69,19 @@ def make_unique(colnames):
 def load_and_clean(uploaded_file) -> pd.DataFrame:
     raw = pd.read_excel(uploaded_file, sheet_name=0, engine="openpyxl")
 
-    # 첫 줄(0행)이 서브헤더(점수/틀린문제/점수 예상 등)
+    # 0행: 서브헤더(점수/틀린문제/점수 예상 등)
     sub = raw.iloc[0]
     df = raw.iloc[1:].copy()
-
     cols = list(raw.columns)
 
-    # ✅ "이름" 열의 실제 위치 찾기
+    # "이름" 열의 위치 찾기
     idx_name = None
     for i, c in enumerate(cols):
         if str(c).strip() == "이름":
             idx_name = i
             break
 
-    # ✅ 이름 기준으로 앞/뒤 2칸씩 = 메타 5칸으로 고정
-    # (너 파일 구조에 맞춤: 레벨, 학교, 이름, 연락처, 연락(이메일/카톡))
+    # 이름 기준 앞/뒤 2칸씩을 메타 5칸으로 고정(너 파일 구조 기준)
     meta_map = {}
     if idx_name is not None:
         meta_positions = [idx_name - 2, idx_name - 1, idx_name, idx_name + 1, idx_name + 2]
@@ -92,7 +90,6 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
             if 0 <= pos < len(cols):
                 meta_map[pos] = std
 
-    # ✅ 나머지 열은 Main__Sub로 합치기
     new_cols = []
     last_main = None
 
@@ -105,7 +102,6 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
 
         main = c
         if isinstance(c, str) and c.startswith("Unnamed"):
-            # Unnamed인데 last_main이 있으면 last_main 사용
             main = last_main if last_main is not None else c
         else:
             last_main = c
@@ -116,48 +112,38 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
         else:
             new_cols.append(f"{str(main).strip()}__{str(sh).strip()}")
 
-    # 중복 컬럼명 방지
     df.columns = make_unique(new_cols)
     df = df.reset_index(drop=True)
 
-    # 점수형 컬럼 숫자 변환
+    # 숫자 변환
     for c in df.columns:
         if any(k in str(c) for k in ["__점수", "__Total", "__점수 예상", "Homework"]):
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # 최종 체크: '이름' 없으면 오류
     if "이름" not in df.columns:
-        raise KeyError(
-            "엑셀에서 '이름' 컬럼을 찾지 못했습니다.\n"
-            "C열 헤더가 정확히 '이름'인지 확인해주세요.\n"
-            "현재 읽힌 컬럼(앞부분):\n"
-            + str(list(df.columns[:15]))
-        )
+        raise KeyError("엑셀에서 '이름' 컬럼을 찾지 못했습니다. C열 헤더가 정확히 '이름'인지 확인해주세요.")
 
     return df
 
 
 # =========================================================
-# 4) 점수 컬럼 자동 탐지
+# 4) 점수 컬럼 탐지
 # =========================================================
 def quiz_score_cols(df):
-    # QUIZ...__점수 / ReviewQuiz...__점수
     return [c for c in df.columns if re.match(r"^(QUIZ\d+.*|ReviewQuiz.*)__점수$", str(c))]
 
 def mock_pred_cols(df):
-    # MOCK TEST ...__점수 예상
     return [c for c in df.columns if re.match(r"^MOCK TEST.*__점수 예상$", str(c))]
 
 def homework_cols(df):
     return [c for c in df.columns if str(c).startswith("Homework")]
 
 def pretty(label: str) -> str:
-    # "(12/22월)" 같은 괄호 제거
     return re.sub(r"\s*\(.*?\)\s*", "", label).strip()
 
 
 # =========================================================
-# 5) 평균행(1개) 찾기: 이름이 비어있고 점수 칼럼이 가장 많이 채워진 행
+# 5) 평균행(1개) 찾기
 # =========================================================
 def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
     best_idx = None
@@ -166,7 +152,7 @@ def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
     for i in range(len(df)):
         name = df.loc[i, "이름"]
         if isinstance(name, str) and name.strip() != "":
-            continue
+            continue  # 학생행 제외
 
         cnt = sum(pd.notna(df.loc[i, c]) for c in score_cols)
         if cnt > best_count:
@@ -179,7 +165,7 @@ def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
 
 
 # =========================================================
-# 6) 학생 1명 선택 → Quiz/Mock/Homework/메타 추출
+# 6) 학생 1명 데이터 추출
 # =========================================================
 def build_onepage_rows(df: pd.DataFrame, student_name: str):
     qcols = quiz_score_cols(df)
@@ -299,7 +285,7 @@ def draw_table_clean(c, x, y_top, w, title, rows, fontR, fontB):
 
 
 def make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units) -> bytes:
-    fontR, fontB = register_()
+    fontR, fontB = register_nanum()
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -403,10 +389,9 @@ except Exception as e:
     st.error(f"엑셀 인식 실패: {e}")
     st.stop()
 
-# 학생 목록 만들기 (평균행 제외: 이름이 있는 행만)
 students = sorted([s for s in df["이름"].dropna().unique().tolist() if str(s).strip() != ""])
 if not students:
-    st.error("학생 이름을 찾지 못했습니다. 엑셀에서 이름 열(C열)에 학생 이름이 들어있는지 확인해주세요.")
+    st.error("학생 이름을 찾지 못했습니다. 엑셀에서 C열(이름)에 학생 이름이 들어있는지 확인해주세요.")
     st.stop()
 
 student = st.selectbox("학생 선택", students)
@@ -418,7 +403,11 @@ DEFAULT_UNITS = [
 ]
 units = st.multiselect("보강필요한 부분(드롭다운)", DEFAULT_UNITS)
 
-quiz_rows, mock_rows, hw_avg, meta = build_onepage_rows(df, student)
+try:
+    quiz_rows, mock_rows, hw_avg, meta = build_onepage_rows(df, student)
+except Exception as e:
+    st.error(f"학생 데이터 처리 실패: {e}")
+    st.stop()
 
 # 미리보기
 c1, c2 = st.columns(2)
@@ -429,7 +418,6 @@ with c1:
         use_container_width=True,
         hide_index=True
     )
-
 with c2:
     st.subheader("Mocktest(점수 예상) 미리보기")
     st.dataframe(
@@ -441,8 +429,12 @@ with c2:
 st.subheader("Homework")
 st.write("평균:", ("데이터 없음" if hw_avg is None else f"{hw_avg:.0f}%"))
 
-# PDF 만들고 다운로드
-pdf_bytes = make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units)
-filename = f"{class_name}_{meta.get('이름','학생')}_report.pdf"
+# PDF 다운로드
+try:
+    pdf_bytes = make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units)
+except Exception as e:
+    st.error(f"PDF 생성 실패: {e}")
+    st.stop()
 
+filename = f"{class_name}_{meta.get('이름','학생')}_report.pdf"
 st.download_button("PDF 다운로드", data=pdf_bytes, file_name=filename, mime="application/pdf")

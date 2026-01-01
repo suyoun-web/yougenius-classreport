@@ -44,11 +44,11 @@ def load_fonts():
     def f(path, size):
         return ImageFont.truetype(path, size=size)
 
-    # ✅ 폰트 키움 (A5지만 화면 꽉차게 쓰기)
+    # ✅ 화면 꽉 차게: 폰트 크게
     return {
-        "title": f(bold_path, 30),
-        "h2": f(bold_path, 18),
-        "b": f(bold_path, 16),
+        "title": f(bold_path, 32),
+        "h2": f(bold_path, 19),
+        "b": f(bold_path, 17),
         "r": f(reg_path, 16),
         "small_b": f(bold_path, 14),
         "small": f(reg_path, 14),
@@ -207,7 +207,7 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
 
 
 # =========================================================
-# PNG 렌더링 (PIL) - A5 / 여백 최소 / 1컬럼 (Quiz→Mock→HW→Units)
+# PNG 렌더링 (PIL) - 1컬럼 고정 (Quiz 아래 Mocktest)
 # =========================================================
 def fmt_num(v):
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -238,27 +238,24 @@ def draw_wrapped_title(draw, x, y, max_w, class_name, student_name, fonts):
     one_line = f"{class_name} {student_name} CLASS REPORT"
     if draw.textlength(one_line, font=fonts["title"]) <= max_w:
         draw_text(draw, x, y, one_line, fonts["title"], fill="#111111")
-        return y + 46
+        return y + 48
     else:
-        line1 = f"{class_name} {student_name}"
-        line2 = "CLASS REPORT"
-        draw_text(draw, x, y, line1, fonts["title"], fill="#111111")
-        draw_text(draw, x, y + 36, line2, fonts["title"], fill="#111111")
-        return y + 82
+        draw_text(draw, x, y, f"{class_name} {student_name}", fonts["title"], fill="#111111")
+        draw_text(draw, x, y + 38, "CLASS REPORT", fonts["title"], fill="#111111")
+        return y + 88
 
 
-def render_table_full(draw, x, y, w, title, rows, fonts):
-    # ✅ 행높이 키움
+def render_table_1col(draw, x, y, w, title, rows, fonts):
     draw_text(draw, x, y, title, fonts["h2"], fill="#111111")
-    y += 28
+    y += 30
 
-    row_h = 28
-    col1 = int(w * 0.58)
+    row_h = 30  # ✅ 조금 더 큼
+    col1 = int(w * 0.60)
     col2 = int(w * 0.20)
 
     draw.rectangle([x, y, x + w, y + row_h], fill="#F5F6F8", outline=None)
-    right_text(draw, x + col1 + col2 - 10, y + 6, "점수", fonts["small_b"], fill="#333333")
-    right_text(draw, x + w - 10, y + 6, "class 평균", fonts["small_b"], fill="#333333")
+    right_text(draw, x + col1 + col2 - 10, y + 7, "점수", fonts["small_b"], fill="#333333")
+    right_text(draw, x + w - 10, y + 7, "class 평균", fonts["small_b"], fill="#333333")
     draw_line(draw, x, y + row_h, x + w, y + row_h, color="#E1E4E8", w=2)
     y += row_h
 
@@ -267,9 +264,9 @@ def render_table_full(draw, x, y, w, title, rows, fonts):
         sv = fmt_num(r["student"])
         av = fmt_num(r["avg"])
 
-        draw_text(draw, x + 8, y + 6, label, fonts["small"], fill="#111111")
-        right_text(draw, x + col1 + col2 - 10, y + 6, sv, fonts["small"], fill="#111111")
-        right_text(draw, x + w - 10, y + 6, av, fonts["small"], fill="#666666")
+        draw_text(draw, x + 10, y + 7, label, fonts["small"], fill="#111111")
+        right_text(draw, x + col1 + col2 - 10, y + 7, sv, fonts["small"], fill="#111111")
+        right_text(draw, x + w - 10, y + 7, av, fonts["small"], fill="#666666")
 
         draw_line(draw, x, y + row_h, x + w, y + row_h, color="#EDEFF2", w=2)
         y += row_h
@@ -280,68 +277,59 @@ def render_table_full(draw, x, y, w, title, rows, fonts):
 def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, hw_progress, units, fonts):
     # A5 비율
     W, H = 877, 1240
-
-    # ✅ 여백 줄이기
-    margin = 26
+    margin = 22  # ✅ 여백 더 줄임
+    w = W - 2 * margin
 
     img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
 
-    # Header (더 위로)
-    draw_text(draw, margin, 12, HEADER_TEXT, fonts["small_b"], fill="#111111")
-    draw_line(draw, margin, 40, W - margin, 40, color="#D9D9D9", w=2)
+    # Header
+    draw_text(draw, margin, 10, HEADER_TEXT, fonts["small_b"], fill="#111111")
+    draw_line(draw, margin, 38, W - margin, 38, color="#D9D9D9", w=2)
 
-    # Footer (더 아래로)
-    draw_line(draw, margin, H - 44, W - margin, H - 44, color="#D9D9D9", w=2)
-    draw_text(draw, margin, H - 32, FOOTER_TEXT, fonts["tiny"], fill="#444444")
+    # Footer
+    draw_line(draw, margin, H - 42, W - margin, H - 42, color="#D9D9D9", w=2)
+    draw_text(draw, margin, H - 30, FOOTER_TEXT, fonts["tiny"], fill="#444444")
 
     # Title
-    y = 54
-    y = draw_wrapped_title(draw, margin, y, W - 2 * margin, class_name, student_name, fonts)
+    y = 50
+    y = draw_wrapped_title(draw, margin, y, w, class_name, student_name, fonts)
 
-    # Class / Student (원하면 제거 가능)
-    draw_text(draw, margin, y, f"Class: {class_name}", fonts["r"], fill="#333333")
-    y += 22
-    draw_text(draw, margin, y, f"Student: {student_name}", fonts["r"], fill="#333333")
-    y += 18
+    # (꽉 차게 하려고 Class/Student 라인 제거했음)
+    y += 6
 
-    # ✅ 1컬럼 폭
-    w = W - 2 * margin
-
-    # Quiz → Mocktest 순서로 세로로 붙이기
-    y += 10
-    y = render_table_full(draw, margin, y, w, "Quiz", quiz_rows, fonts)
-    y += 16
-    y = render_table_full(draw, margin, y, w, "Mocktest (점수 예상)", mock_rows, fonts)
+    # ✅ 1컬럼: Quiz -> Mocktest가 "아래로"
+    y = render_table_1col(draw, margin, y, w, "Quiz", quiz_rows, fonts)
+    y += 14
+    y = render_table_1col(draw, margin, y, w, "Mocktest (점수 예상)", mock_rows, fonts)
 
     # Homework 진행도
-    y += 14
+    y += 12
     draw_text(draw, margin, y, "Homework 진행도", fonts["h2"], fill="#111111")
-    y += 28
+    y += 30
 
-    badge_h = 40
+    badge_h = 44
     draw.rounded_rectangle([margin, y, margin + w, y + badge_h],
-                           radius=16, fill="#F5F6F8", outline=None)
+                           radius=18, fill="#F5F6F8", outline=None)
     hw_txt = "데이터 없음" if hw_progress is None else f"{hw_progress:.0f}%"
-    draw_text(draw, margin + 14, y + 9, hw_txt, fonts["b"], fill="#111111")
-    y += badge_h + 16
+    draw_text(draw, margin + 14, y + 10, hw_txt, fonts["b"], fill="#111111")
+    y += badge_h + 14
 
-    # Units box (남는 공간 전부)
+    # 보강필요한 부분 (남는 공간 전부)
     draw_text(draw, margin, y, "보강필요한 부분", fonts["h2"], fill="#111111")
-    y += 28
+    y += 30
 
     unit_txt = ", ".join(units) if units else "선택 없음"
+    bottom_limit = H - 42 - 10
+    box_h = max(160, bottom_limit - y)
 
-    bottom_limit = H - 44 - 10  # footer 라인 위까지
-    box_h = max(120, bottom_limit - y)
     draw.rounded_rectangle([margin, y, W - margin, y + box_h],
-                           radius=18, fill="#F9FAFB", outline=None)
+                           radius=20, fill="#F9FAFB", outline=None)
 
     # wrap
     max_width = w - 24
     words = unit_txt.split(" ")
-    lines = []
-    cur = ""
+    lines, cur = [], ""
     for wword in words:
         test = (cur + " " + wword).strip()
         if draw.textlength(test, font=fonts["small"]) <= max_width:
@@ -353,10 +341,10 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     if cur:
         lines.append(cur)
 
-    yy = y + 12
-    for line in lines[:8]:
+    yy = y + 14
+    for line in lines[:10]:
         draw_text(draw, margin + 12, yy, line, fonts["small"], fill="#111111")
-        yy += 22
+        yy += 24
 
     return img
 
@@ -385,9 +373,9 @@ def make_zip_of_pngs(png_dict: dict) -> bytes:
 # =========================================================
 # Streamlit UI
 # =========================================================
-st.set_page_config(page_title="성적표 PNG ZIP 생성 (A5 / 1컬럼)", layout="wide")
-st.title("엑셀 업로드 → 학생별 보강 선택 → PNG ZIP 다운로드 (A5 / 꽉차게)")
-st.caption("Quiz 아래에 Mocktest를 배치해서 빈 공간을 줄이고, 여백/폰트를 키워 더 꽉차게 출력합니다.")
+st.set_page_config(page_title="성적표 PNG ZIP 생성 (Mocktest 아래)", layout="wide")
+st.title("엑셀 업로드 → 학생별 보강 선택 → PNG ZIP 다운로드 (A5 / Mocktest 아래로)")
+st.caption("✅ Quiz 아래에 Mocktest를 배치해서 화면을 꽉 채웁니다.")
 
 class_name = st.text_input("Class 이름(리포트에 표시)", value="S2 개념반")
 
@@ -443,7 +431,6 @@ st.divider()
 if st.button("학생별 PNG 생성 → ZIP 만들기"):
     png_files = {}
     errors = []
-
     preview_student = None
     preview_img = None
 

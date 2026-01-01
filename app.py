@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import zipfile
 import pandas as pd
 import streamlit as st
 
@@ -12,7 +13,6 @@ from PIL import Image, ImageDraw, ImageFont
 # =========================================================
 HEADER_TEXT = "YOU, GENIUS 유지니어스 MATH with 유진쌤"
 FOOTER_TEXT = "Kakaotalk : yujinj524 / Phone : 010-6395-8733"
-
 REPORT_TITLE = "트리플 유진쌤 MATH CLASS REPORT"
 
 # 보강 단원(요청 6개)
@@ -46,9 +46,8 @@ def load_fonts():
     def f(path, size):
         return ImageFont.truetype(path, size=size)
 
-    fonts = {
+    return {
         "title": f(bold_path, 36),
-        "h1": f(bold_path, 24),
         "h2": f(bold_path, 18),
         "b": f(bold_path, 16),
         "r": f(reg_path, 16),
@@ -56,7 +55,6 @@ def load_fonts():
         "small": f(reg_path, 14),
         "tiny": f(reg_path, 12),
     }
-    return fonts
 
 
 # =========================================================
@@ -141,11 +139,14 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
 def quiz_score_cols(df):
     return [c for c in df.columns if re.match(r"^(QUIZ\d+.*|ReviewQuiz.*)__점수$", str(c))]
 
+
 def mock_pred_cols(df):
     return [c for c in df.columns if re.match(r"^MOCK TEST.*__점수 예상$", str(c))]
 
+
 def homework_cols(df):
     return [c for c in df.columns if str(c).startswith("Homework")]
+
 
 def pretty(label: str) -> str:
     return re.sub(r"\s*\(.*?\)\s*", "", label).strip()
@@ -193,21 +194,13 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
     quiz_rows = []
     for c in qcols:
         main = c.split("__")[0]
-        quiz_rows.append({
-            "label": pretty(main).replace("QUIZ", "Quiz"),
-            "student": s_row[c],
-            "avg": avg_row[c],
-        })
+        quiz_rows.append({"label": pretty(main).replace("QUIZ", "Quiz"), "student": s_row[c], "avg": avg_row[c]})
 
     mock_rows = []
     for c in mcols:
         main = c.split("__")[0]
         label = pretty(main).replace("MOCK TEST", "Mocktest")
-        mock_rows.append({
-            "label": label,
-            "student": s_row[c],
-            "avg": avg_row[c],
-        })
+        mock_rows.append({"label": label, "student": s_row[c], "avg": avg_row[c]})
 
     # Homework 진행도(평균)
     hw_progress = None
@@ -215,29 +208,20 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
         vals = s_row[hcols].dropna()
         if len(vals) > 0:
             hw_progress = float(vals.mean())
-
             # 0~1 비율로 들어온 경우 대비
             if hw_progress <= 1.0:
                 hw_progress *= 100.0
 
-    meta = {"이름": s_row.get("이름", "")}
-    return quiz_rows, mock_rows, hw_progress, meta
+    return quiz_rows, mock_rows, hw_progress
 
 
 # =========================================================
 # PNG 렌더링 (PIL)
 # =========================================================
-def draw_line(draw, x1, y1, x2, y2, color="#D9D9D9", w=2):
-    draw.line((x1, y1, x2, y2), fill=color, width=w)
-
-def draw_text(draw, x, y, text, font, fill="#111111"):
-    draw.text((x, y), text, font=font, fill=fill)
-
 def fmt_num(v):
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
     try:
-        # 정수면 정수로, 아니면 불필요 소수 제거
         fv = float(v)
         if abs(fv - round(fv)) < 1e-9:
             return str(int(round(fv)))
@@ -245,13 +229,23 @@ def fmt_num(v):
     except Exception:
         return str(v)
 
+
+def draw_line(draw, x1, y1, x2, y2, color="#D9D9D9", w=2):
+    draw.line((x1, y1, x2, y2), fill=color, width=w)
+
+
+def draw_text(draw, x, y, text, font, fill="#111111"):
+    draw.text((x, y), text, font=font, fill=fill)
+
+
+def right_text(draw, rx, y, text, font, fill="#111111"):
+    tw = draw.textlength(text, font=font)
+    draw.text((rx - tw, y), text, font=font, fill=fill)
+
+
 def render_table(draw, x, y, w, title, rows, fonts):
-    """
-    간단한 표: 제목 + 헤더 + 행들
-    columns: label / score / avg
-    """
     # title
-    draw_text(draw, x, y, title, fonts["h2"])
+    draw_text(draw, x, y, title, fonts["h2"], fill="#111111")
     y += 34
 
     row_h = 34
@@ -261,16 +255,8 @@ def render_table(draw, x, y, w, title, rows, fonts):
 
     # header bg
     draw.rectangle([x, y, x + w, y + row_h], fill="#F5F6F8", outline=None)
-    draw_text(draw, x + col1 + col2 - 10, y + 7, "점수", fonts["small_b"], fill="#333333")
-    draw_text(draw, x + w - 10, y + 7, "class 평균", fonts["small_b"], fill="#333333")
-    draw_text(draw, x + col1 + col2 - 10, y + 7, "점수", fonts["small_b"], fill="#333333")
-
-    # right align helper by measuring text width
-    def right(draw, rx, ty, text, font, fill="#111111"):
-        tw = draw.textlength(text, font=font)
-        draw.text((rx - tw, ty), text, font=font, fill=fill)
-
-    # header underline
+    right_text(draw, x + col1 + col2 - 10, y + 7, "점수", fonts["small_b"], fill="#333333")
+    right_text(draw, x + w - 10, y + 7, "class 평균", fonts["small_b"], fill="#333333")
     draw_line(draw, x, y + row_h, x + w, y + row_h, color="#E1E4E8", w=2)
     y += row_h
 
@@ -280,17 +266,18 @@ def render_table(draw, x, y, w, title, rows, fonts):
         sv = fmt_num(r["student"])
         av = fmt_num(r["avg"])
 
-        draw_text(draw, x + 8, y + 7, label, fonts["small"])
-        right(draw, x + col1 + col2 - 10, y + 7, sv, fonts["small"], fill="#111111")
-        right(draw, x + w - 10, y + 7, av, fonts["small"], fill="#666666")
+        draw_text(draw, x + 8, y + 7, label, fonts["small"], fill="#111111")
+        right_text(draw, x + col1 + col2 - 10, y + 7, sv, fonts["small"], fill="#111111")
+        right_text(draw, x + w - 10, y + 7, av, fonts["small"], fill="#666666")
 
         draw_line(draw, x, y + row_h, x + w, y + row_h, color="#EDEFF2", w=2)
         y += row_h
 
     return y
 
+
 def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, hw_progress, units, fonts):
-    # A4 느낌(150 dpi 정도) 1240 x 1754
+    # A4 느낌(가로 1240px)
     W, H = 1240, 1754
     margin = 60
 
@@ -329,15 +316,15 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     # Quiz table
     y_left_end = render_table(draw, left_x, top_y, left_w, "Quiz", quiz_rows, fonts)
 
-    # Homework 진행도 (퀴즈 밑으로)
+    # Homework 진행도 (퀴즈 밑)
     y_hw = y_left_end + 18
     draw_text(draw, left_x, y_hw, "Homework 진행도", fonts["h2"], fill="#111111")
     y_hw += 34
 
-    # badge
     badge_w = min(520, left_w)
     badge_h = 44
-    draw.rounded_rectangle([left_x, y_hw, left_x + badge_w, y_hw + badge_h], radius=16, fill="#F5F6F8", outline=None)
+    draw.rounded_rectangle([left_x, y_hw, left_x + badge_w, y_hw + badge_h],
+                           radius=16, fill="#F5F6F8", outline=None)
     hw_txt = "데이터 없음" if hw_progress is None else f"{hw_progress:.0f}%"
     draw_text(draw, left_x + 16, y_hw + 9, hw_txt, fonts["b"], fill="#111111")
 
@@ -352,12 +339,13 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
 
     unit_txt = ", ".join(units) if units else "선택 없음"
     box_h = 150
-    draw.rounded_rectangle([margin, y_next, W - margin, y_next + box_h], radius=18, fill="#F9FAFB", outline=None)
+    draw.rounded_rectangle([margin, y_next, W - margin, y_next + box_h],
+                           radius=18, fill="#F9FAFB", outline=None)
 
     # wrap text
     max_width = (W - 2 * margin) - 30
-    lines = []
     words = unit_txt.split(" ")
+    lines = []
     cur = ""
     for wword in words:
         test = (cur + " " + wword).strip()
@@ -378,31 +366,36 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     return img
 
 
-def combine_images_vertical(images, gap=40, bg="white"):
-    if not images:
-        return None
-    w = max(im.size[0] for im in images)
-    total_h = sum(im.size[1] for im in images) + gap * (len(images) - 1)
-    out = Image.new("RGB", (w, total_h), bg)
-    y = 0
-    for im in images:
-        out.paste(im, (0, y))
-        y += im.size[1] + gap
-    return out
-
-
 def pil_to_png_bytes(img: Image.Image) -> bytes:
     bio = io.BytesIO()
     img.save(bio, format="PNG")
     return bio.getvalue()
 
 
+def safe_filename(name: str) -> str:
+    # Windows/zip에서 문제될 문자 제거
+    name = str(name).strip()
+    name = re.sub(r'[\\/:*?"<>|]+', "_", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name if name else "학생"
+
+
+def make_zip_of_pngs(png_dict: dict) -> bytes:
+    """
+    png_dict: { "파일명.png": png_bytes }
+    """
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for fname, data in png_dict.items():
+            zf.writestr(fname, data)
+    return bio.getvalue()
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
-st.set_page_config(page_title="성적표 PNG 생성", layout="wide")
-st.title("엑셀 업로드 → 학생별 보강 선택 → 전체 PNG 다운로드")
-st.caption("학생 전원의 요약 리포트를 PNG로 만들어 한 파일로 내려받습니다. (세로로 길게 이어붙인 이미지)")
+st.set_page_config(page_title="성적표 PNG ZIP 생성", layout="wide")
+st.title("엑셀 업로드 → 학생별 보강 선택 → PNG ZIP 다운로드")
 
 class_name = st.text_input("Class 이름(리포트에 표시)", value="S2 개념반")
 
@@ -422,7 +415,6 @@ if not students:
     st.error("학생 이름을 찾지 못했습니다. 엑셀에서 C열(이름)에 학생 이름이 들어있는지 확인해주세요.")
     st.stop()
 
-# 폰트 로드
 try:
     fonts = load_fonts()
 except Exception as e:
@@ -437,14 +429,14 @@ if "units_by_student" not in st.session_state:
 
 units_by_student = st.session_state["units_by_student"]
 
-# 학생 목록이 바뀌면 dict 보정
+# 학생 목록 변경 시 보정
 for s in students:
     units_by_student.setdefault(s, [])
 for s in list(units_by_student.keys()):
     if s not in students:
         units_by_student.pop(s, None)
 
-# 한 페이지에서 전원 드롭다운
+# 전원 설정 UI
 for s in students:
     c1, c2 = st.columns([1, 4])
     with c1:
@@ -459,14 +451,14 @@ for s in students:
 
 st.divider()
 
-# 생성 버튼
-if st.button("전체 PNG 생성하기"):
-    images = []
+if st.button("학생별 PNG 생성 → ZIP 만들기"):
+    png_files = {}
     errors = []
+    previews = []
 
     for s in students:
         try:
-            quiz_rows, mock_rows, hw_progress, meta = build_onepage_rows(df, s)
+            quiz_rows, mock_rows, hw_progress = build_onepage_rows(df, s)
             img = render_student_report_image(
                 class_name=class_name,
                 student_name=s,
@@ -476,24 +468,33 @@ if st.button("전체 PNG 생성하기"):
                 units=units_by_student.get(s, []),
                 fonts=fonts,
             )
-            images.append(img)
+            png_bytes = pil_to_png_bytes(img)
+            fname = f"{safe_filename(s)}.png"
+            png_files[fname] = png_bytes
+
+            # 미리보기는 앞 2명만
+            if len(previews) < 2:
+                previews.append((s, img))
+
         except Exception as e:
             errors.append(f"{s}: {e}")
 
     if errors:
         st.error("일부 학생 리포트 생성 실패:\n" + "\n".join(errors))
 
-    if images:
-        combined = combine_images_vertical(images, gap=40)
-        png_bytes = pil_to_png_bytes(combined)
+    if png_files:
+        zip_bytes = make_zip_of_pngs(png_files)
 
-        st.success("PNG 생성 완료!")
-        st.image(combined, caption="미리보기(세로로 길게 이어붙인 전체 이미지)", use_container_width=True)
+        st.success(f"완료! 총 {len(png_files)}명의 PNG를 ZIP으로 만들었습니다.")
 
-        filename = f"{class_name}_ALL_STUDENTS_REPORT.png"
+        # 미리보기
+        for name, im in previews:
+            st.image(im, caption=f"미리보기: {name}", use_container_width=True)
+
+        zip_name = f"{safe_filename(class_name)}_reports.zip"
         st.download_button(
-            "전체 PNG 다운로드",
-            data=png_bytes,
-            file_name=filename,
-            mime="image/png",
+            "ZIP 다운로드 (학생별 PNG)",
+            data=zip_bytes,
+            file_name=zip_name,
+            mime="application/zip",
         )

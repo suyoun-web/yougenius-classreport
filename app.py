@@ -17,11 +17,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 HEADER_TEXT = "YOU, GENIUS 유지니어스 MATH with 유진쌤"
 FOOTER_TEXT = "Kakaotalk : yujinj524 / Phone : 010-6395-8733"
 
-META_COLS = ["레벨", "학교", "이름", "연락처", "연락(이메일/카톡)"]
-
 # =========================
-# 폰트 등록 (나눔고딕)
-#  - fonts/ 폴더에 폰트 파일이 있는 버전
+# 폰트 등록 (나눔고딕) - fonts/ 폴더
 # =========================
 @st.cache_resource
 def register_nanum():
@@ -33,10 +30,9 @@ def register_nanum():
             "폰트 파일을 찾지 못했습니다.\n"
             "fonts/NanumGothic-Regular.ttf\n"
             "fonts/NanumGothicBold.ttf\n"
-            "위 경로에 파일이 있는지 확인하세요."
+            "경로/파일명을 확인하세요."
         )
 
-    # 중복 등록 방지
     try:
         pdfmetrics.getFont("NG")
         pdfmetrics.getFont("NGB")
@@ -46,14 +42,35 @@ def register_nanum():
 
     return "NG", "NGB"
 
+
 # =========================
-# 엑셀 로드 + 컬럼 정리
+# 엑셀 로드 + 컬럼 정리 (이름 컬럼 자동 탐색)
 # =========================
+def norm(s: str) -> str:
+    return re.sub(r"\s+", "", str(s)).lower()
+
+def pick_col(cols, candidates):
+    """
+    cols: 실제 df.columns 리스트
+    candidates: ['이름','name','학생명'...] 같은 후보
+    => 매칭되는 실제 컬럼명을 반환
+    """
+    col_norm = {c: norm(c) for c in cols}
+    cand_norm = [norm(x) for x in candidates]
+
+    for c in cols:
+        for cn in cand_norm:
+            if cn != "" and cn in col_norm[c]:
+                return c
+    return None
+
 def load_and_clean(uploaded_file) -> pd.DataFrame:
-    raw = pd.read_excel(uploaded_file, sheet_name=0)
-    sub = raw.iloc[0]          # 서브헤더 행
+    # ※ IMPORTANT: 수식 결과값 읽기 위해 openpyxl 사용
+    raw = pd.read_excel(uploaded_file, sheet_name=0, engine="openpyxl")
+    sub = raw.iloc[0]          # 서브헤더 행(점수/틀린문제/점수 예상)
     df  = raw.iloc[1:].copy()  # 실제 데이터
 
+    # ---- main header + subheader 합치기 ----
     cols = raw.columns.tolist()
     new_cols = []
     last_main = None
@@ -72,18 +89,44 @@ def load_and_clean(uploaded_file) -> pd.DataFrame:
             new_cols.append(f"{str(main).strip()}__{str(sh).strip()}")
 
     df.columns = new_cols
+    df = df.reset_index(drop=True)
 
-    # 앞 5열 메타 컬럼명 고정(너 파일 구조 기준)
-    df.rename(columns={df.columns[i]: META_COLS[i] for i in range(5)}, inplace=True)
-
-    # 점수형 컬럼 숫자 변환
+    # ---- 점수형 컬럼 숫자 변환 ----
     for c in df.columns:
         if any(k in str(c) for k in ["__점수", "__Total", "__점수 예상", "Homework"]):
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = df.reset_index(drop=True)
+    # ---- 메타 컬럼 자동 표준화(이름/레벨/학교 등) ----
+    cols2 = df.columns.tolist()
+
+    name_col = pick_col(cols2, ["이름", "name", "학생명", "성명"])
+    level_col = pick_col(cols2, ["레벨", "level", "class", "반"])
+    school_col = pick_col(cols2, ["학교", "school"])
+    phone_col = pick_col(cols2, ["연락처", "phone", "전화"])
+    contact_col = pick_col(cols2, ["연락(이메일/카톡)", "카톡", "kakao", "email", "이메일"])
+
+    rename_map = {}
+    if name_col: rename_map[name_col] = "이름"
+    if level_col: rename_map[level_col] = "레벨"
+    if school_col: rename_map[school_col] = "학교"
+    if phone_col: rename_map[phone_col] = "연락처"
+    if contact_col: rename_map[contact_col] = "연락(이메일/카톡)"
+
+    df = df.rename(columns=rename_map)
+
+    # 필수: 이름 컬럼 없으면 여기서 친절하게 종료
+    if "이름" not in df.columns:
+        raise KeyError(
+            "엑셀에서 '이름' 컬럼을 찾지 못했습니다.\n"
+            "엑셀의 학생 이름 열 제목이 '이름'/'Name'/'학생명' 중 하나인지 확인하세요."
+        )
+
     return df
 
+
+# =========================
+# 컬럼 판별
+# =========================
 def quiz_score_cols(df):
     return [c for c in df.columns if re.match(r"^(QUIZ\d+.*|ReviewQuiz.*)__점수$", str(c))]
 
@@ -111,7 +154,7 @@ def find_class_avg_row(df: pd.DataFrame, score_cols: list[str]) -> int:
             best_idx = i
 
     if best_idx is None or best_count <= 0:
-        raise ValueError("평균행을 찾지 못했습니다. (이름이 비어있는 평균 행이 1줄 있어야 합니다)")
+        raise ValueError("평균행을 찾지 못했습니다. (이름이 비어있고 점수 칼럼에 숫자가 있는 행이 필요)")
     return best_idx
 
 def build_onepage_rows(df: pd.DataFrame, student_name: str):
@@ -161,8 +204,9 @@ def build_onepage_rows(df: pd.DataFrame, student_name: str):
 
     return quiz_rows, mock_rows, hw_avg, meta
 
+
 # =========================
-# PDF 스타일(깔끔 + 가독성)
+# PDF
 # =========================
 def draw_header_footer(c: canvas.Canvas, W, H, margin, fontR, fontB, page_num: int):
     c.setFont(fontB, 11)
@@ -178,7 +222,6 @@ def draw_header_footer(c: canvas.Canvas, W, H, margin, fontR, fontB, page_num: i
     c.setFillColor(colors.HexColor("#444444"))
     c.drawString(margin, margin + 5*mm, FOOTER_TEXT)
     c.drawRightString(W - margin, margin + 5*mm, f"{page_num}")
-
     c.setFillColor(colors.black)
 
 def draw_table_clean(c, x, y_top, w, title, rows, fontR, fontB):
@@ -230,8 +273,7 @@ def make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units) -> by
     W, H = A4
     margin = 16 * mm
 
-    page_num = 1
-    draw_header_footer(c, W, H, margin, fontR, fontB, page_num)
+    draw_header_footer(c, W, H, margin, fontR, fontB, 1)
 
     y = H - margin - 12*mm
 
@@ -299,6 +341,7 @@ def make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units) -> by
     c.save()
     return buf.getvalue()
 
+
 # =========================
 # Streamlit UI
 # =========================
@@ -315,12 +358,20 @@ if not uploaded:
 try:
     df = load_and_clean(uploaded)
 except Exception as e:
-    st.error(f"엑셀 파싱 실패: {e}")
+    st.error(f"엑셀 파싱/인식 실패: {e}")
+    st.write("디버그용: 인식된 컬럼 목록")
+    # 가능하면 컬럼을 보여줘서 바로 원인 파악 가능
+    try:
+        raw_dbg = pd.read_excel(uploaded, sheet_name=0, engine="openpyxl")
+        st.write(list(raw_dbg.columns))
+    except Exception:
+        pass
     st.stop()
 
 students = sorted([s for s in df["이름"].dropna().unique().tolist() if str(s).strip() != ""])
 if not students:
-    st.error("학생 이름을 찾지 못했습니다. '이름' 열 구조를 확인해주세요.")
+    st.error("학생 이름을 찾지 못했습니다. '이름' 열 제목을 확인해주세요.")
+    st.write("현재 컬럼:", list(df.columns))
     st.stop()
 
 student = st.selectbox("학생 선택", students)
@@ -334,7 +385,6 @@ units = st.multiselect("보강필요한 부분(드롭다운)", DEFAULT_UNITS)
 
 quiz_rows, mock_rows, hw_avg, meta = build_onepage_rows(df, student)
 
-# 미리보기
 c1, c2 = st.columns(2)
 with c1:
     st.subheader("Quiz 미리보기")
@@ -354,7 +404,6 @@ with c2:
 st.subheader("Homework")
 st.write("평균:", ("데이터 없음" if hw_avg is None else f"{hw_avg:.0f}%"))
 
-# PDF 다운로드
 pdf_bytes = make_report_pdf(class_name, meta, quiz_rows, mock_rows, hw_avg, units)
 filename = f"{class_name}_{meta.get('이름','학생')}_report.pdf"
 

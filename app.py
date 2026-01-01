@@ -292,12 +292,10 @@ def render_table(draw, x, y, w, title, rows, fonts, row_h=30):
 
 
 def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, hw_progress, units, fonts):
-    # ✅ 가로는 A5 느낌 유지, 세로는 자동 계산
     W = 877
     margin = 22
     w = W - 2 * margin
 
-    # 1) 높이 계산용 더미 캔버스
     dummy = Image.new("RGB", (W, 200), "white")
     ddraw = ImageDraw.Draw(dummy)
 
@@ -312,10 +310,8 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     h_quiz = table_height(len(quiz_rows), title_gap=30, header_h=ROW_H, row_h=ROW_H)
     h_mock = table_height(len(mock_rows), title_gap=30, header_h=ROW_H, row_h=ROW_H)
 
-    # homework 영역
-    h_hw = 30 + 44 + 14  # 제목+뱃지+여백
+    h_hw = 30 + 44 + 14
 
-    # units 영역(텍스트 줄 수 기반)
     unit_txt = ", ".join(units) if units else "선택 없음"
     unit_lines = wrap_text(ddraw, unit_txt, fonts["small"], max_width=w - 24)
     lines_h = len(unit_lines) * 24
@@ -323,12 +319,12 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
 
     content_h = (
         header_h
-        + (y_title - header_h)  # 타이틀 시작 전 여백
+        + (y_title - header_h)
         + th + 6
         + h_quiz + GAP
         + h_mock + GAP
         + h_hw
-        + 30  # 보강 제목
+        + 30
         + unit_box_h
     )
 
@@ -336,15 +332,12 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     bottom_pad = 10
     H = int(content_h + footer_h + bottom_pad)
 
-    # 2) 실제 렌더
     img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
 
-    # Header
     draw_text(draw, margin, 10, HEADER_TEXT, fonts["small_b"], fill="#111111")
     draw_line(draw, margin, 38, W - margin, 38, color="#D9D9D9", w=2)
 
-    # Title
     y = y_title
     if len(title_lines) == 1:
         draw_text(draw, margin, y, title_lines[0], fonts["title"], fill="#111111")
@@ -355,15 +348,12 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
         y += 88
     y += 6
 
-    # Quiz
     y = render_table(draw, margin, y, w, "Quiz", quiz_rows, fonts, row_h=ROW_H)
     y += GAP
 
-    # Mocktest (✅ 아래)
     y = render_table(draw, margin, y, w, "Mocktest (점수 예상)", mock_rows, fonts, row_h=ROW_H)
     y += GAP
 
-    # Homework
     draw_text(draw, margin, y, "Homework 진행도", fonts["h2"], fill="#111111")
     y += 30
     badge_h = 44
@@ -373,7 +363,6 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
     draw_text(draw, margin + 14, y + 10, hw_txt, fonts["b"], fill="#111111")
     y += badge_h + 14
 
-    # Units
     draw_text(draw, margin, y, "보강필요한 부분", fonts["h2"], fill="#111111")
     y += 30
 
@@ -385,7 +374,6 @@ def render_student_report_image(class_name, student_name, quiz_rows, mock_rows, 
         draw_text(draw, margin + 12, yy, line, fonts["small"], fill="#111111")
         yy += 24
 
-    # Footer 맨 아래
     footer_y_line = H - 42
     draw_line(draw, margin, footer_y_line, W - margin, footer_y_line, color="#D9D9D9", w=2)
     draw_text(draw, margin, H - 30, FOOTER_TEXT, fonts["tiny"], fill="#444444")
@@ -417,9 +405,9 @@ def make_zip_of_pngs(png_dict: dict) -> bytes:
 # =========================================================
 # Streamlit UI
 # =========================================================
-st.set_page_config(page_title="성적표 PNG ZIP 생성 (자동 크롭)", layout="wide")
-st.title("엑셀 업로드 → 학생별 보강 선택 → PNG ZIP 다운로드 (세로 자동 크롭)")
-st.caption("✅ 고정 높이 없이, 보강필요한 부분까지 출력한 뒤 거기서 딱 잘라 저장합니다.")
+st.set_page_config(page_title="유진 SAT CLASS REPORT", layout="wide")
+st.title("유진 SAT CLASS REPORT")
+st.caption("✅ 고정 높이 없이, 보강필요한 부분까지 출력한 뒤 거기서 딱 잘라 PNG로 저장합니다.")
 
 class_name = st.text_input("Class 이름(리포트에 표시)", value="S2 개념반")
 

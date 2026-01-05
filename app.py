@@ -16,6 +16,8 @@ FOOTER_TEXT = "Kakaotalk : yujinj524 / Phone : 010-6395-8733"
 
 UNIT_OPTIONS = [
     "I. Linear",
+    "II. Percent",
+    "III. Unit conversion",
     "IV. Quadratic",
     "V. Exponential",
     "VI. Polynomials, radical and rational functions",

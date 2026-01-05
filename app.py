@@ -831,6 +831,31 @@ def set_to_text_lines(items: List[str], max_lines: int = 30) -> str:
         return ""
     items = items[:max_lines]
     return "\n".join(items)
+    def major_id_from_topic_raw(topic_raw: str) -> Optional[int]:
+    code = normalize_topic_code(topic_raw)
+    if not code:
+        return None
+    try:
+        major = int(code.split(".")[0])
+        return major if 1 <= major <= 7 else None
+    except:
+        return None
+
+
+def build_meta_major_map(meta_df: pd.DataFrame) -> Dict[Tuple[int, int], int]:
+    """
+    (module, q) -> major_id (1~7)
+    """
+    mp: Dict[Tuple[int, int], int] = {}
+    for _, r in meta_df.iterrows():
+        md = int(r["__module__"])
+        q = int(r["__q__"])
+        topic_raw = r["__topic_raw__"]
+        mid = major_id_from_topic_raw(topic_raw)
+        if mid is not None:
+            mp[(md, q)] = mid
+    return mp
+
 
 
 # =========================================================

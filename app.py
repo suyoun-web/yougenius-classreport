@@ -866,7 +866,7 @@ def compute_overlap_topics_per_student(
 
 
 # =========================================================
-# Streamlit UI (Tabs)
+# Streamlit UI (Tabs)  ✅ Tab1/Tab2 완전 분리 렌더링
 # =========================================================
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 st.title(PAGE_TITLE)
@@ -875,7 +875,7 @@ st.caption("점수 엑셀 + Mock 메타 → 학생별 PNG ZIP / (편집 가능�
 tab1, tab2 = st.tabs(["Class Report", "틀린 유형 분석"])
 
 # -------------------------
-# Tab1: 원래 그대로
+# Tab1: Class Report (st.stop() 없이, 조건부로만 실행)
 # -------------------------
 with tab1:
     col1, col2 = st.columns([1.2, 1])
@@ -887,162 +887,163 @@ with tab1:
     threshold = st.slider("단원 정답률 기준(자동 추천용)", 0.0, 1.0, 0.70, 0.05)
 
     if not uploaded_score:
-        st.info("점수 엑셀을 업로드해줘.")
-        st.stop()
+        st.info("점수 엑셀을 업로드하면 Tab1 리포트 기능이 활성화됩니다. (Tab2는 독립적으로 사용 가능)")
+    else:
+        try:
+            df_score, name_col, class_col = load_score_excel(uploaded_score)
+            quiz_cols, mock_cols, hw_cols = get_columns(df_score)
+            _ = detect_latest_mocktest_number(mock_cols)
+            avg_row = find_avg_row(df_score, name_col)
+            students = students_list(df_score, name_col)
 
-    df_score, name_col, class_col = load_score_excel(uploaded_score)
-    quiz_cols, mock_cols, hw_cols = get_columns(df_score)  # ✅ ReviewQuiz는 맨 뒤로 정렬됨
-    _ = detect_latest_mocktest_number(mock_cols)
-    avg_row = find_avg_row(df_score, name_col)
-    students = students_list(df_score, name_col)
+            default_class = ""
+            if class_col:
+                for s in students:
+                    sr = get_student_row(df_score, name_col, s)
+                    v = str(sr.get(class_col, "")).strip()
+                    if v and v.lower() != "nan":
+                        default_class = v
+                        break
 
-    default_class = ""
-    if class_col:
-        for s in students:
-            sr = get_student_row(df_score, name_col, s)
-            v = str(sr.get(class_col, "")).strip()
-            if v and v.lower() != "nan":
-                default_class = v
-                break
+            class_name = st.text_input("Class 이름(리포트 제목에 표시)", value=default_class or "S2 반")
 
-    class_name = st.text_input("Class 이름(리포트 제목에 표시)", value=default_class or "S2 반")
+            # ✅ 폰트 로드도 Tab1 내부에서만 (Tab2에 영향 X)
+            pil_fonts = load_pil_fonts()
+            ensure_reportlab_fonts()
 
-    pil_fonts = load_pil_fonts()
-    ensure_reportlab_fonts()
+            m1_wrong_col, m2_wrong_col = find_wrong_cols_in_score(df_score)
+            if not m1_wrong_col or not m2_wrong_col:
+                st.error("점수 엑셀에서 오답 열('M1 틀린문제', 'M2 틀린문제' 등)을 찾지 못했어요.")
+            elif not uploaded_mock_meta:
+                st.warning("Mock 메타 파일을 올려야 단원별 정답률(자동 추천)을 계산할 수 있어요.")
+            else:
+                meta_df = read_mock_meta(uploaded_mock_meta)
+                wrong_map = build_wrong_map_from_score(df_score, name_col, m1_wrong_col, m2_wrong_col)
 
-    m1_wrong_col, m2_wrong_col = find_wrong_cols_in_score(df_score)
-    if not m1_wrong_col or not m2_wrong_col:
-        st.error("점수 엑셀에서 오답 열('M1 틀린문제', 'M2 틀린문제' 등)을 찾지 못했어요.")
-        st.stop()
+                topic_acc_by_student: Dict[str, Dict[str, Tuple[int, int, float]]] = {}
+                for s in students:
+                    topic_acc_by_student[s] = compute_topic_accuracy(meta_df, wrong_map, s)
 
-    if not uploaded_mock_meta:
-        st.warning("Mock 메타 파일을 올려야 단원별 정답률(자동 추천)을 계산할 수 있어요.")
-        st.stop()
+                topic_options = list(TOPIC_NAMES.values())
 
-    meta_df = read_mock_meta(uploaded_mock_meta)
-    wrong_map = build_wrong_map_from_score(df_score, name_col, m1_wrong_col, m2_wrong_col)
+                st.divider()
+                st.subheader("학생별 보강 단원 선택 (자동 추천 + 수정 가능)")
 
-    topic_acc_by_student: Dict[str, Dict[str, Tuple[int, int, float]]] = {}
-    for s in students:
-        topic_acc_by_student[s] = compute_topic_accuracy(meta_df, wrong_map, s)
+                if "units_by_student" not in st.session_state:
+                    st.session_state["units_by_student"] = {s: [] for s in students}
+                units_by_student = st.session_state["units_by_student"]
 
-    topic_options = list(TOPIC_NAMES.values())
+                if st.button("자동 추천 다시 적용(전체 학생)", key="btn_reapply_all"):
+                    for s in students:
+                        rec = auto_recommend_topics(topic_acc_by_student.get(s, {}), threshold=threshold)
+                        units_by_student[s] = rec
+                    st.success("자동 추천을 다시 적용했어요.")
 
-    st.divider()
-    st.subheader("학생별 보강 단원 선택 (자동 추천 + 수정 가능)")
+                for s in students:
+                    c1, c2 = st.columns([1, 4])
+                    with c1:
+                        st.markdown(f"**{s}**")
+                    with c2:
+                        default_sel = units_by_student.get(s, [])
+                        if not default_sel:
+                            rec = auto_recommend_topics(topic_acc_by_student.get(s, {}), threshold=threshold)
+                            units_by_student[s] = rec
+                            default_sel = rec
 
-    if "units_by_student" not in st.session_state:
-        st.session_state["units_by_student"] = {s: [] for s in students}
-    units_by_student = st.session_state["units_by_student"]
+                        units_by_student[s] = st.multiselect(
+                            label="",
+                            options=topic_options,
+                            default=default_sel,
+                            key=f"units_{s}",
+                        )
 
-    if st.button("자동 추천 다시 적용(전체 학생)", key="btn_reapply_all"):
-        for s in students:
-            rec = auto_recommend_topics(topic_acc_by_student.get(s, {}), threshold=threshold)
-            units_by_student[s] = rec
-        st.success("자동 추천을 다시 적용했어요.")
+                st.divider()
 
-    for s in students:
-        c1, c2 = st.columns([1, 4])
-        with c1:
-            st.markdown(f"**{s}**")
-        with c2:
-            default_sel = units_by_student.get(s, [])
-            if not default_sel:
-                rec = auto_recommend_topics(topic_acc_by_student.get(s, {}), threshold=threshold)
-                units_by_student[s] = rec
-                default_sel = rec
+                if st.button("학생별 리포트 생성 (PNG + Editable PDF)", type="primary", key="btn_build_reports"):
+                    png_files: Dict[str, bytes] = {}
+                    pdf_files: Dict[str, bytes] = {}
+                    errors = []
+                    preview_img = None
+                    preview_student = None
 
-            units_by_student[s] = st.multiselect(
-                label="",
-                options=topic_options,
-                default=default_sel,
-                key=f"units_{s}",
-            )
+                    safe_class = safe_filename(class_name)
 
-    st.divider()
+                    for s in students:
+                        try:
+                            student_row = get_student_row(df_score, name_col, s)
+                            use_class = class_name.strip() if class_name.strip() else "CLASS"
 
-    if st.button("학생별 리포트 생성 (PNG + Editable PDF)", type="primary", key="btn_build_reports"):
-        png_files: Dict[str, bytes] = {}
-        pdf_files: Dict[str, bytes] = {}
-        errors = []
-        preview_img = None
-        preview_student = None
+                            quiz_rows, mock_rows = build_rows(student_row, avg_row, quiz_cols, mock_cols)
+                            hw_progress = compute_hw_progress(student_row, hw_cols)
 
-        safe_class = safe_filename(class_name)
+                            selected = units_by_student.get(s, [])
+                            topic_units = build_topic_units(selected)
 
-        for s in students:
-            try:
-                student_row = get_student_row(df_score, name_col, s)
-                use_class = class_name.strip() if class_name.strip() else "CLASS"
+                            img = render_student_report_image(
+                                class_name=use_class,
+                                student_name=s,
+                                quiz_rows=quiz_rows,
+                                mock_rows=mock_rows,
+                                hw_progress=hw_progress,
+                                topic_units=topic_units,
+                                fonts=pil_fonts,
+                            )
 
-                quiz_rows, mock_rows = build_rows(student_row, avg_row, quiz_cols, mock_cols)
-                hw_progress = compute_hw_progress(student_row, hw_cols)
+                            base = f"{safe_class}_{safe_filename(s)}"
+                            png_files[f"{base}.png"] = pil_to_png_bytes(img)
 
-                selected = units_by_student.get(s, [])
-                topic_units = build_topic_units(selected)
+                            pdf_files[f"{base}.pdf"] = create_editable_pdf_bytes(
+                                class_name=use_class,
+                                student_name=s,
+                                quiz_rows=quiz_rows,
+                                mock_rows=mock_rows,
+                                hw_progress=hw_progress,
+                                topic_units=topic_units,
+                            )
 
-                img = render_student_report_image(
-                    class_name=use_class,
-                    student_name=s,
-                    quiz_rows=quiz_rows,
-                    mock_rows=mock_rows,
-                    hw_progress=hw_progress,
-                    topic_units=topic_units,
-                    fonts=pil_fonts,
-                )
+                            if preview_img is None:
+                                preview_img = img
+                                preview_student = s
 
-                base = f"{safe_class}_{safe_filename(s)}"
-                png_files[f"{base}.png"] = pil_to_png_bytes(img)
+                        except Exception as e:
+                            errors.append(f"{s}: {e}")
 
-                pdf_files[f"{base}.pdf"] = create_editable_pdf_bytes(
-                    class_name=use_class,
-                    student_name=s,
-                    quiz_rows=quiz_rows,
-                    mock_rows=mock_rows,
-                    hw_progress=hw_progress,
-                    topic_units=topic_units,
-                )
+                    if errors:
+                        st.error("일부 학생 리포트 생성 실패:\n" + "\n".join(errors))
 
-                if preview_img is None:
-                    preview_img = img
-                    preview_student = s
+                    if png_files:
+                        png_zip = make_zip(png_files)
+                        pdf_zip = make_zip(pdf_files)
 
-            except Exception as e:
-                errors.append(f"{s}: {e}")
+                        st.success(f"완료! PNG {len(png_files)}개 / PDF {len(pdf_files)}개 생성했습니다.")
 
-        if errors:
-            st.error("일부 학생 리포트 생성 실패:\n" + "\n".join(errors))
+                        d1, d2 = st.columns([1, 1])
+                        with d1:
+                            st.download_button(
+                                "📦 PNG ZIP 다운로드",
+                                data=png_zip,
+                                file_name=f"{safe_class}_reports_png.zip",
+                                mime="application/zip",
+                                key="download_png_zip",
+                            )
+                        with d2:
+                            st.download_button(
+                                "📦 PDF ZIP 다운로드 (편집 가능 텍스트)",
+                                data=pdf_zip,
+                                file_name=f"{safe_class}_reports_pdf.zip",
+                                mime="application/zip",
+                                key="download_pdf_zip",
+                            )
 
-        if png_files:
-            png_zip = make_zip(png_files)
-            pdf_zip = make_zip(pdf_files)
+                        if preview_img is not None:
+                            st.image(preview_img, caption=f"미리보기: {preview_student}", use_container_width=True)
 
-            st.success(f"완료! PNG {len(png_files)}개 / PDF {len(pdf_files)}개 생성했습니다.")
-
-            d1, d2 = st.columns([1, 1])
-            with d1:
-                st.download_button(
-                    "📦 PNG ZIP 다운로드",
-                    data=png_zip,
-                    file_name=f"{safe_class}_reports_png.zip",
-                    mime="application/zip",
-                    key="download_png_zip",
-                )
-            with d2:
-                st.download_button(
-                    "📦 PDF ZIP 다운로드 (편집 가능 텍스트)",
-                    data=pdf_zip,
-                    file_name=f"{safe_class}_reports_pdf.zip",
-                    mime="application/zip",
-                    key="download_pdf_zip",
-                )
-
-            if preview_img is not None:
-                st.image(preview_img, caption=f"미리보기: {preview_student}", use_container_width=True)
+        except Exception as e:
+            st.error(f"Tab1 처리 중 오류: {e}")
 
 
 # -------------------------
-# Tab2: 틀린 유형 분석
+# Tab2: 틀린 유형 분석 (완전 독립)
 # -------------------------
 with tab2:
     st.subheader("틀린 유형 분석")
@@ -1070,70 +1071,58 @@ with tab2:
     if st.button("📊 분석하기", type="primary", key="t2_run"):
         if not uploaded_export_mock:
             st.warning("EXPORT Mocktest 파일을 먼저 업로드해줘.")
-            st.stop()
-
-        # export mock 로드
-        try:
-            df_ex, ex_name_col = load_export_mock_excel(uploaded_export_mock)
-        except Exception as e:
-            st.error(f"EXPORT Mocktest 파일 읽기 실패: {e}")
-            st.stop()
-
-        # 컬럼 탐지 (MockN + M1/M2 틀린문제)
-        col_map = detect_mock_wrong_cols_export(df_ex)
-        if not col_map:
-            st.error(
-                "EXPORT Mocktest에서 'Mocktest번호 + (M1/M2) + 틀린문제' 컬럼을 찾지 못했어요.\n\n"
-                "예시 컬럼명:\n"
-                "- Mocktest1 M1 틀린문제\n"
-                "- Mocktest1 M2 틀린문제\n"
-                "- Mocktest2 M1 틀린문제 ...\n"
-            )
-            st.write("현재 컬럼:", list(df_ex.columns))
-            st.stop()
-
-        # meta 로드 (업로드 된 것만)
-        meta_files = {1: meta1, 2: meta2, 3: meta3}
-        meta_maps: Dict[int, Dict[int, Dict[int, Optional[int]]]] = {}
-        meta_errors = []
-        for mock_no, f in meta_files.items():
-            if f is None:
-                continue
+        else:
             try:
-                mdf = read_mock_meta(f)
-                meta_maps[mock_no] = meta_to_lookup(mdf)  # {module:{q:major}}
+                df_ex, ex_name_col = load_export_mock_excel(uploaded_export_mock)
+
+                col_map = detect_mock_wrong_cols_export(df_ex)
+                if not col_map:
+                    st.error(
+                        "EXPORT Mocktest에서 'Mocktest번호 + (M1/M2) + 틀린문제' 컬럼을 찾지 못했어요.\n\n"
+                        "예시:\n- Mocktest1 M1 틀린문제\n- Mocktest1 M2 틀린문제\n- Mocktest2 M1 틀린문제 ..."
+                    )
+                    st.write("현재 컬럼:", list(df_ex.columns))
+                else:
+                    meta_files = {1: meta1, 2: meta2, 3: meta3}
+                    meta_maps: Dict[int, Dict[int, Dict[int, Optional[int]]]] = {}
+                    meta_errors = []
+
+                    for mock_no, f in meta_files.items():
+                        if f is None:
+                            continue
+                        try:
+                            mdf = read_mock_meta(f)
+                            meta_maps[mock_no] = meta_to_lookup(mdf)
+                        except Exception as e:
+                            meta_errors.append(f"Mock{mock_no} 메타 읽기 실패: {e}")
+
+                    if meta_errors:
+                        st.error("메타 파일 오류:\n" + "\n".join(meta_errors))
+                    elif not meta_maps:
+                        st.warning("Mock 메타 파일을 최소 1개 이상 업로드해야 분석할 수 있어요.")
+                    else:
+                        wrong_map_multi = build_wrong_map_from_export_mock(df_ex, ex_name_col, col_map)
+
+                        students = sorted(
+                            [n for n in df_ex[ex_name_col].dropna().astype(str).str.strip().tolist() if n not in ["", "nan", "평균"]]
+                        )
+                        students = list(dict.fromkeys(students))
+
+                        df_result = compute_overlap_topics_per_student(
+                            students=students,
+                            wrong_map=wrong_map_multi,
+                            meta_maps=meta_maps,
+                            overlap_k=overlap_k,
+                        )
+
+                        st.success("분석 완료!")
+                        st.dataframe(df_result, use_container_width=True)
+
+                        only_overlap = st.checkbox("중복 단원이 있는 학생만 보기", value=False, key="t2_only_overlap")
+                        if only_overlap:
+                            colname = f"중복으로 틀린 단원({overlap_k}회 이상)"
+                            df2 = df_result[df_result[colname].astype(str).str.strip() != ""].copy()
+                            st.dataframe(df2, use_container_width=True)
+
             except Exception as e:
-                meta_errors.append(f"Mock{mock_no} 메타 읽기 실패: {e}")
-
-        if meta_errors:
-            st.error("메타 파일 오류:\n" + "\n".join(meta_errors))
-            st.stop()
-
-        if not meta_maps:
-            st.warning("Mock 메타 파일을 최소 1개 이상 업로드해야 분석할 수 있어요. (Mock1~3 중 아무거나)")
-            st.stop()
-
-        # export mock에서 학생별 오답 맵 생성
-        wrong_map_multi = build_wrong_map_from_export_mock(df_ex, ex_name_col, col_map)
-
-        # 학생 목록
-        students = sorted([n for n in df_ex[ex_name_col].dropna().astype(str).str.strip().tolist() if n not in ["", "nan", "평균"]])
-        students = list(dict.fromkeys(students))  # unique preserve
-
-        # 분석 (meta가 업로드된 mock만 대상으로)
-        df_result = compute_overlap_topics_per_student(
-            students=students,
-            wrong_map=wrong_map_multi,
-            meta_maps=meta_maps,
-            overlap_k=overlap_k,
-        )
-
-        st.success("분석 완료!")
-        st.dataframe(df_result, use_container_width=True)
-
-        # 간단 필터: 중복 단원 있는 학생만 보기
-        only_overlap = st.checkbox("중복 단원이 있는 학생만 보기", value=False, key="t2_only_overlap")
-        if only_overlap:
-            colname = f"중복으로 틀린 단원({overlap_k}회 이상)"
-            df2 = df_result[df_result[colname].astype(str).str.strip() != ""].copy()
-            st.dataframe(df2, use_container_width=True)
+                st.error(f"Tab2 처리 중 오류: {e}")

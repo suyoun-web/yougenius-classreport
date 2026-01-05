@@ -825,37 +825,88 @@ def build_meta_topic_map_sub(meta_df: pd.DataFrame) -> Dict[Tuple[int, int], str
         mp[(md, q)] = topic_display_sub(topic_raw)
     return mp
 
+rows_out = []
+for s in students2:
+    sr = get_student_row(dfm, name_col2, s)
+
+    # subtopic / major 각각: 몇 개의 mock에서 등장했는지 카운트(중복용)
+    appear_sub = Counter()
+    appear_major = Counter()
+
+    # mock별 소단원/대단원 리스트(표시용)
+    per_mock_sub: Dict[int, List[str]] = {}
+    per_mock_major: Dict[int, List[str]] = {}
+
+    for mn in usable_mocks:
+        m1c, m2c = mock_wrong_cols[mn]
+        wrong_m1 = set([n for n in parse_wrong_list(sr.get(m1c, "")) if 1 <= n <= 22])
+        wrong_m2 = set([n for n in parse_wrong_list(sr.get(m2c, "")) if 1 <= n <= 22])
+
+        sub_map = meta_topic_map_by_mock[mn]    # (mod,q)->"5.3 name"
+        maj_map = meta_major_map_by_mock[mn]    # (mod,q)->major_id(1~7)
+
+        sub_this = set()
+        major_this = set()
+
+        for q in wrong_m1:
+            t = sub_map.get((1, q), "")
+            if t:
+                sub_this.add(t)
+            mid = maj_map.get((1, q), None)
+            if mid is not None:
+                major_this.add(mid)
+
+        for q in wrong_m2:
+            t = sub_map.get((2, q), "")
+            if t:
+                sub_this.add(t)
+            mid = maj_map.get((2, q), None)
+            if mid is not None:
+                major_this.add(mid)
+
+        # 이 mock에서 나온 항목(중복 제거) -> appear +1
+        for t in sub_this:
+            appear_sub[t] += 1
+        for mid in major_this:
+            appear_major[mid] += 1
+
+        per_mock_sub[mn] = sorted(list(sub_this))
+        per_mock_major[mn] = [TOPIC_NAMES.get(mid, str(mid)) for mid in sorted(list(major_this))]
+
+    repeated_sub = [(t, c) for t, c in appear_sub.items() if c >= 2]
+    repeated_sub.sort(key=lambda x: (-x[1], x[0]))
+    repeated_sub_text = "\n".join([f"{t}  ({c}회)" for t, c in repeated_sub]) if repeated_sub else ""
+
+    repeated_major = [(mid, c) for mid, c in appear_major.items() if c >= 2]
+    repeated_major.sort(key=lambda x: (-x[1], x[0]))
+    repeated_major_text = "\n".join(
+        [f"{TOPIC_NAMES.get(mid, str(mid))}  ({c}회)" for mid, c in repeated_major]
+    ) if repeated_major else ""
+
+    out = {
+        "Name": s,
+        "반복 대단원(2회 이상)": repeated_major_text,
+        "반복 소단원(2회 이상)": repeated_sub_text,
+    }
+
+    # mock별 표시 컬럼(원하면 안 보여도 됨 — 너가 보기 편하라고 같이 둠)
+    for mn in [1, 2, 3]:
+        if mn in usable_mocks:
+            out[f"Mock{mn} 틀린 대단원"] = set_to_text_lines(per_mock_major.get(mn, []), max_lines=30)
+            out[f"Mock{mn} 틀린 소단원"] = set_to_text_lines(per_mock_sub.get(mn, []), max_lines=30)
+        else:
+            out[f"Mock{mn} 틀린 대단원"] = ""
+            out[f"Mock{mn} 틀린 소단원"] = ""
+
+    rows_out.append(out)
+
+result_df = pd.DataFrame(rows_out)
 
 def set_to_text_lines(items: List[str], max_lines: int = 30) -> str:
     if not items:
         return ""
     items = items[:max_lines]
     return "\n".join(items)
-    def major_id_from_topic_raw(topic_raw: str) -> Optional[int]:
-    code = normalize_topic_code(topic_raw)
-    if not code:
-        return None
-    try:
-        major = int(code.split(".")[0])
-        return major if 1 <= major <= 7 else None
-    except:
-        return None
-
-
-def build_meta_major_map(meta_df: pd.DataFrame) -> Dict[Tuple[int, int], int]:
-    """
-    (module, q) -> major_id (1~7)
-    """
-    mp: Dict[Tuple[int, int], int] = {}
-    for _, r in meta_df.iterrows():
-        md = int(r["__module__"])
-        q = int(r["__q__"])
-        topic_raw = r["__topic_raw__"]
-        mid = major_id_from_topic_raw(topic_raw)
-        if mid is not None:
-            mp[(md, q)] = mid
-    return mp
-
 
 
 # =========================================================

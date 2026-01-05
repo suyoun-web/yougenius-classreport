@@ -3,6 +3,7 @@ import os
 import re
 import zipfile
 from typing import Dict, List, Optional, Tuple
+from collections import Counter
 
 import pandas as pd
 import streamlit as st
@@ -23,6 +24,7 @@ FOOTER_TEXT = "Kakaotalk : yujinj524 / Phone : 010-6395-8733"
 
 PAGE_TITLE = "유진 sat class report"
 
+# Tab1 (대단원) 표시용
 TOPIC_NAMES = {
     1: "1. Linear",
     2: "2. Percent & Unit Conversion",
@@ -31,6 +33,60 @@ TOPIC_NAMES = {
     5: "5. Polynomials, radical and rational functions",
     6: "6. Geometry",
     7: "7. Statistics",
+}
+
+# =========================================================
+# ✅ Tab2: 소단원 매핑 (코드형 단원 -> 소단원명)
+# =========================================================
+TOPIC_SUB_NAMES = {
+    "1.1": "Linear function",
+    "1.2": "Linear equation",
+    "1.3": "Linear interpretation",
+    "1.4": "Linear word problems",
+    "1.5": "Linear inequality",
+    "1.6": "Identity equation",
+    "1.7": "Absolute function and equation",
+    "1.8": "System of equations",
+
+    "2.1": "Ratios and Percent",
+    "2.2": "Unit conversion",
+
+    "3.1": "Quadratic function",
+    "3.2": "Quadratic equation and inequality",
+    "3.3": "Sum and product",
+    "3.4": "Discriminant",
+    "3.5": "Quadratic Word problems",
+    "3.6": "Factoring",
+
+    "4.1": "Exponential equation",
+    "4.2": "Exponential function",
+    "4.3": "Exponential model",
+
+    "5.1": "Polynomial equation and graph",
+    "5.2": "Polynomial – Long division and factor/remainder theorem",
+    "5.3": "Radical equation and function",
+    "5.4": "Rational expression and rational exponent",
+    "5.5": "Rational equation and function",
+    "5.6": "Isolation",
+
+    "6.1": "Similar and congruent triangles",
+    "6.2": "Similar figure",
+    "6.3": "Right triangle and trigonometry",
+    "6.4": "Volume and surface area",
+    "6.5": "Parallel lines",
+    "6.6": "Circle",
+    "6.7": "Polygon and ETC",
+
+    "7.1": "Probability",
+    "7.2": "Conditional probability",
+    "7.3": "Scatter plot",
+    "7.4": "Sampling method",
+    "7.5": "Generalize",
+    "7.6": "Mean, median, mode",
+    "7.7": "Standard deviation",
+    "7.8": "Margin of error",
+    "7.9": "Experiment",
+    "7.10": "Box plot",
 }
 
 FONT_REG = "fonts/NanumGothic-Regular.ttf"
@@ -123,17 +179,6 @@ def norm_module(v) -> Optional[int]:
     return None
 
 
-def major_topic_id(topic_str: str) -> Optional[int]:
-    s = str(topic_str).strip()
-    if s == "" or s.lower() == "nan":
-        return None
-    m = re.match(r"^\s*(\d+)", s)
-    if not m:
-        return None
-    v = int(m.group(1))
-    return v if 1 <= v <= 7 else None
-
-
 def parse_wrong_list(val) -> List[int]:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return []
@@ -169,6 +214,41 @@ def guess_col(df: pd.DataFrame, exact: List[str] = None, regexes: List[str] = No
     return None
 
 
+# =========================================================
+# ✅ Tab2: "코드형 단원" -> "소단원 표시명" 변환
+# =========================================================
+def normalize_topic_code(topic_raw: str) -> str:
+    """
+    topic_raw 예시:
+    - "5.3"
+    - " 5.3 Radical equation..."
+    - "5.3-2)" 같은 잡문자
+    -> "5.3" 코드만 뽑기
+    """
+    s = str(topic_raw or "").strip()
+    if not s:
+        return ""
+    m = re.search(r"(\d+(?:\.\d+)?)", s)
+    return m.group(1) if m else ""
+
+
+def topic_display_sub(topic_raw: str) -> str:
+    """
+    소단원 표시: "5.3 Radical equation and function"
+    매핑 없으면 코드만이라도 반환
+    """
+    code = normalize_topic_code(topic_raw)
+    if not code:
+        return ""
+    sub = TOPIC_SUB_NAMES.get(code, "")
+    if sub:
+        return f"{code} {sub}"
+    return code
+
+
+# =========================================================
+# 점수/리포트용(탭1) 로더/유틸
+# =========================================================
 def load_score_excel(uploaded_file) -> Tuple[pd.DataFrame, str, Optional[str]]:
     df = pd.read_excel(uploaded_file, engine="openpyxl")
     df.columns = [str(c).strip() for c in df.columns]
@@ -186,23 +266,21 @@ def load_score_excel(uploaded_file) -> Tuple[pd.DataFrame, str, Optional[str]]:
     return df, name_col, class_col
 
 
-# ✅ 여기만 핵심 변경: Quiz(숫자) 먼저 → ReviewQuiz는 항상 맨 뒤
+# ✅ Quiz(숫자) 먼저 → ReviewQuiz는 항상 맨 뒤
 def get_columns(df: pd.DataFrame):
     def num_key(col):
         m = re.search(r"(\d+)", str(col))
         return int(m.group(1)) if m else 9999
 
-    quiz_numbered = []   # (num, col)
-    quiz_other = []      # Quiz로 시작은 하는데 숫자 추출 불명확한 것
-    review = []          # ReviewQuiz*
-
+    quiz_numbered = []
+    quiz_other = []
+    review = []
     mock_cols = []
     hw_cols = []
 
     for c in df.columns:
         s = str(c).strip()
 
-        # Mocktest / Homework
         if re.match(r"^Mocktest\s*\d+", s, re.IGNORECASE):
             mock_cols.append(c)
             continue
@@ -210,25 +288,22 @@ def get_columns(df: pd.DataFrame):
             hw_cols.append(c)
             continue
 
-        # ReviewQuiz는 무조건 마지막
         if re.match(r"^ReviewQuiz", s, re.IGNORECASE):
             review.append(c)
             continue
 
-        # Quiz 숫자형 (Quiz1, Quiz 1, QUIZ07 등)
         m = re.match(r"^Quiz\s*0*(\d+)$", s, re.IGNORECASE)
         if m:
             quiz_numbered.append((int(m.group(1)), c))
             continue
 
-        # Quiz로 시작하지만 숫자형이 아닌 경우(혹시 모를 예외)
         if re.match(r"^Quiz", s, re.IGNORECASE):
             quiz_other.append(c)
             continue
 
     quiz_cols = [c for _, c in sorted(quiz_numbered, key=lambda x: x[0])]
     quiz_cols += sorted(quiz_other, key=num_key)
-    quiz_cols += sorted(review, key=num_key)  # ✅ ReviewQuiz는 항상 맨 뒤
+    quiz_cols += sorted(review, key=num_key)
 
     mock_cols = sorted(mock_cols, key=num_key)
     hw_cols = sorted(hw_cols, key=num_key)
@@ -259,15 +334,6 @@ def get_student_row(df: pd.DataFrame, name_col: str, student_name: str) -> pd.Se
     if mask.sum() == 0:
         raise ValueError(f"학생을 찾지 못했습니다: {student_name}")
     return df.loc[mask].iloc[0]
-
-
-def detect_latest_mocktest_number(mock_cols: List[str]) -> Optional[int]:
-    nums = []
-    for c in mock_cols:
-        m = re.match(r"^Mocktest\s*(\d+)$", str(c).strip(), re.IGNORECASE)
-        if m:
-            nums.append(int(m.group(1)))
-    return max(nums) if nums else None
 
 
 def find_wrong_cols_in_score(df: pd.DataFrame) -> Tuple[Optional[str], Optional[str]]:
@@ -317,15 +383,13 @@ def read_mock_meta(mock_file) -> pd.DataFrame:
 
     out = out[(out["__q__"] >= 1) & (out["__q__"] <= 22)].copy()
     out["__topic_raw__"] = out[col_topic].astype(str).str.strip()
-    out["__major__"] = out["__topic_raw__"].apply(major_topic_id)
 
-    out = out[["__module__", "__q__", "__topic_raw__", "__major__"]].drop_duplicates(
-        subset=["__module__", "__q__"]
-    )
+    out = out[["__module__", "__q__", "__topic_raw__"]].drop_duplicates(subset=["__module__", "__q__"])
     return out
 
 
 def compute_topic_accuracy(meta_df: pd.DataFrame, wrong_map: Dict[str, Dict[int, set]], student: str) -> Dict[str, Tuple[int, int, float]]:
+    # Tab1 자동추천(대단원) 유지
     if student not in wrong_map:
         wrong_map[student] = {1: set(), 2: set()}
 
@@ -335,10 +399,13 @@ def compute_topic_accuracy(meta_df: pd.DataFrame, wrong_map: Dict[str, Dict[int,
     for _, r in meta_df.iterrows():
         md = int(r["__module__"])
         q = int(r["__q__"])
-        major = r["__major__"]
-        if pd.isna(major) or major is None:
+        code = normalize_topic_code(r["__topic_raw__"])
+        if not code:
             continue
-        major = int(major)
+        try:
+            major = int(code.split(".")[0])
+        except:
+            continue
         if major not in totals:
             continue
 
@@ -682,8 +749,8 @@ def create_editable_pdf_bytes(
     y -= 10*mm
 
     box_h = max(28*mm, (len(topic_units[:12]) * 7*mm + 12*mm))
-    c.setFillColor(colors.Color(249/255, 250/255, 251/255))
-    c.setStrokeColor(colors.Color(249/255, 250/255, 251/255))
+    c.setFillColor(topic_box_fill)
+    c.setStrokeColor(topic_box_fill)
     c.roundRect(left, y - box_h, usable_w, box_h, 6*mm, stroke=0, fill=1)
 
     c.setFont("NanumGothic", 11)
@@ -708,213 +775,114 @@ def create_editable_pdf_bytes(
 
 
 # =========================================================
-# Tab2: 틀린 유형 분석 (Mock1/2/3 중복 단원)
+# ✅ Tab2 helpers: Export Mocktest에서 Mock별 (M1/M2 틀린문제) 컬럼 찾기
 # =========================================================
-def _clean(s) -> str:
-    if s is None:
-        return ""
-    if isinstance(s, float) and pd.isna(s):
-        return ""
-    return str(s).strip()
-
-
-def load_export_mock_excel(uploaded_file) -> Tuple[pd.DataFrame, str]:
+def read_excel_any(uploaded_file) -> pd.DataFrame:
     df = pd.read_excel(uploaded_file, engine="openpyxl")
     df.columns = [str(c).strip() for c in df.columns]
-
-    name_col = guess_col(df, exact=["Name", "이름"], regexes=[r"(학생|student).*이름", r"^name$"])
-    if not name_col:
-        raise KeyError("EXPORT Mocktest 파일에서 'Name'(또는 '이름') 컬럼을 찾지 못했습니다.")
-
-    df[name_col] = df[name_col].astype(str).str.strip()
-    return df, name_col
+    return df
 
 
-def detect_mock_wrong_cols_export(df: pd.DataFrame) -> Dict[int, Dict[int, str]]:
+def detect_mock_numbers_from_columns(cols: List[str]) -> List[int]:
+    nums = set()
+    for c in cols:
+        m = re.search(r"Mocktest\s*(\d+)", str(c), re.IGNORECASE)
+        if m:
+            nums.add(int(m.group(1)))
+    return sorted(nums)
+
+
+def find_mock_wrong_cols(df: pd.DataFrame, mock_no: int) -> Tuple[Optional[str], Optional[str]]:
+    cols = [str(c).strip() for c in df.columns]
+
+    # 다양한 형태 대응:
+    # - "Mocktest1 M1 틀린문제"
+    # - "Mocktest 1 - m1 틀린문제"
+    # - "Mocktest1_m1 틀린문제"
+    m1_rx = re.compile(rf"mocktest\s*{mock_no}.*\bm1\b.*(틀린|오답).*문제", re.IGNORECASE)
+    m2_rx = re.compile(rf"mocktest\s*{mock_no}.*\bm2\b.*(틀린|오답).*문제", re.IGNORECASE)
+
+    m1_col = None
+    m2_col = None
+    for c in cols:
+        if m1_rx.search(c):
+            m1_col = c
+        if m2_rx.search(c):
+            m2_col = c
+
+    return m1_col, m2_col
+
+
+def build_meta_topic_map_sub(meta_df: pd.DataFrame) -> Dict[Tuple[int, int], str]:
     """
-    EXPORT Mock 파일에서:
-      - Mocktest1 ... M1 틀린문제
-      - Mocktest1 ... M2 틀린문제
-    같은 컬럼을 찾아서 {mock_no: {1: colname, 2: colname}} 형태로 리턴
+    (module, q) -> "5.3 Radical equation and function" 형태로 저장
     """
-    out: Dict[int, Dict[int, str]] = {}
-
-    for c in df.columns:
-        col = str(c).strip()
-        low = col.lower()
-
-        # mock 번호
-        m = re.search(r"mock\s*test\s*(\d+)|mocktest\s*(\d+)", low, re.IGNORECASE)
-        if not m:
-            continue
-        mock_no = int(m.group(1) or m.group(2))
-
-        # 틀린문제/오답 포함
-        if not re.search(r"(틀린|오답).*문제|wrong", col, re.IGNORECASE):
-            continue
-
-        # module 판단
-        mod = None
-        if re.search(r"\bM1\b|module\s*1", col, re.IGNORECASE):
-            mod = 1
-        elif re.search(r"\bM2\b|module\s*2", col, re.IGNORECASE):
-            mod = 2
-
-        if mod is None:
-            continue
-
-        out.setdefault(mock_no, {})[mod] = col
-
-    return out
-
-
-def build_wrong_map_from_export_mock(df: pd.DataFrame, name_col: str, col_map: Dict[int, Dict[int, str]]) -> Dict[str, Dict[int, Dict[int, set]]]:
-    """
-    {student: {mock_no: {1:set(...), 2:set(...)}}}
-    """
-    out: Dict[str, Dict[int, Dict[int, set]]] = {}
-    for _, r in df.iterrows():
-        nm = _clean(r.get(name_col, ""))
-        if nm == "" or nm.lower() == "nan" or nm == "평균":
-            continue
-
-        out[nm] = {}
-        for mock_no, mods in col_map.items():
-            m1_col = mods.get(1)
-            m2_col = mods.get(2)
-
-            m1 = set(parse_wrong_list(r.get(m1_col, ""))) if m1_col else set()
-            m2 = set(parse_wrong_list(r.get(m2_col, ""))) if m2_col else set()
-
-            out[nm][mock_no] = {
-                1: set([x for x in m1 if 1 <= x <= 22]),
-                2: set([x for x in m2 if 1 <= x <= 22]),
-            }
-    return out
-
-
-def meta_to_lookup(meta_df: pd.DataFrame) -> Dict[int, Dict[int, Optional[int]]]:
-    """
-    return {module: {q: major_topic_id}}
-    """
-    mp: Dict[int, Dict[int, Optional[int]]] = {1: {}, 2: {}}
+    mp: Dict[Tuple[int, int], str] = {}
     for _, r in meta_df.iterrows():
         md = int(r["__module__"])
         q = int(r["__q__"])
-        major = r["__major__"]
-        major = None if (pd.isna(major) or major is None) else int(major)
-        mp.setdefault(md, {})[q] = major
+        topic_raw = r["__topic_raw__"]
+        mp[(md, q)] = topic_display_sub(topic_raw)
     return mp
 
 
-def compute_overlap_topics_per_student(
-    students: List[str],
-    wrong_map: Dict[str, Dict[int, Dict[int, set]]],
-    meta_maps: Dict[int, Dict[int, Dict[int, Optional[int]]]],
-    overlap_k: int = 2,
-) -> pd.DataFrame:
-    """
-    학생별로 mock들(예: 1,2,3)에서 반복해서 틀린 단원을 계산.
-    overlap_k=2면 2회 이상 반복된 단원만.
-    """
-    rows = []
-
-    for s in students:
-        stu_map = wrong_map.get(s, {})
-        mock_nos = sorted([m for m in stu_map.keys() if m in meta_maps])
-
-        # mock별로 "틀린 단원(major)" 집합
-        wrong_topics_by_mock: Dict[int, set] = {}
-        for m in mock_nos:
-            meta_lookup = meta_maps[m]  # {module:{q:major}}
-            majors = set()
-            for md in [1, 2]:
-                for q in stu_map[m].get(md, set()):
-                    major = meta_lookup.get(md, {}).get(q)
-                    if major is not None and 1 <= major <= 7:
-                        majors.add(major)
-            wrong_topics_by_mock[m] = majors
-
-        # 단원별로 몇 개의 mock에서 등장했는지
-        cnt: Dict[int, int] = {i: 0 for i in range(1, 8)}
-        for m, majors in wrong_topics_by_mock.items():
-            for major in majors:
-                cnt[major] += 1
-
-        overlap = [major for major, c in cnt.items() if c >= overlap_k]
-        overlap_sorted = sorted(overlap, key=lambda x: (-cnt[x], x))
-
-        overlap_txt = ", ".join([TOPIC_NAMES[m] for m in overlap_sorted])
-
-        # 참고용: mock별 틀린 단원 표시
-        detail_parts = []
-        for m in mock_nos:
-            majors = sorted(list(wrong_topics_by_mock.get(m, set())))
-            detail = ", ".join([TOPIC_NAMES[x] for x in majors])
-            detail_parts.append(f"Mock{m}: {detail}")
-        detail_txt = " | ".join(detail_parts)
-
-        rows.append(
-            {
-                "Name": s,
-                f"중복으로 틀린 단원({overlap_k}회 이상)": overlap_txt,
-                "mock별 틀린 단원(참고)": detail_txt,
-            }
-        )
-
-    return pd.DataFrame(rows)
+def set_to_text_lines(items: List[str], max_lines: int = 30) -> str:
+    if not items:
+        return ""
+    items = items[:max_lines]
+    return "\n".join(items)
 
 
 # =========================================================
-# Streamlit UI (Tabs)  ✅ Tab1/Tab2 완전 분리 렌더링
+# Streamlit UI
 # =========================================================
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 st.title(PAGE_TITLE)
-st.caption("점수 엑셀 + Mock 메타 → 학생별 PNG ZIP / (편집 가능한) PDF ZIP")
 
-tab1, tab2 = st.tabs(["Class Report", "틀린 유형 분석"])
+tab1, tab2 = st.tabs(["CLASS REPORT", "틀린 유형 분석"])
 
-# -------------------------
-# Tab1: Class Report (st.stop() 없이, 조건부로만 실행)
-# -------------------------
+
+# =========================================================
+# Tab1: 기존 완성본 그대로 (동작 분리만)
+# =========================================================
 with tab1:
+    st.caption("점수 엑셀 + Mock 메타 → 학생별 PNG ZIP / (편집 가능한) PDF ZIP")
+
     col1, col2 = st.columns([1.2, 1])
     with col1:
         uploaded_score = st.file_uploader("1) 점수 엑셀 업로드(.xlsx)", type=["xlsx"], key="score_xlsx")
     with col2:
         uploaded_mock_meta = st.file_uploader("2) Mock 메타 업로드(모듈/문항번호/단원)", type=["xlsx"], key="mock_meta_xlsx")
 
-    threshold = st.slider("단원 정답률 기준(자동 추천용)", 0.0, 1.0, 0.70, 0.05)
+    threshold = st.slider("단원 정답률 기준(자동 추천용)", 0.0, 1.0, 0.70, 0.05, key="t1_threshold")
 
     if not uploaded_score:
-        st.info("점수 엑셀을 업로드하면 Tab1 리포트 기능이 활성화됩니다. (Tab2는 독립적으로 사용 가능)")
+        st.info("점수 엑셀을 업로드해줘.")
     else:
-        try:
-            df_score, name_col, class_col = load_score_excel(uploaded_score)
-            quiz_cols, mock_cols, hw_cols = get_columns(df_score)
-            _ = detect_latest_mocktest_number(mock_cols)
-            avg_row = find_avg_row(df_score, name_col)
-            students = students_list(df_score, name_col)
+        df_score, name_col, class_col = load_score_excel(uploaded_score)
+        quiz_cols, mock_cols, hw_cols = get_columns(df_score)
+        avg_row = find_avg_row(df_score, name_col)
+        students = students_list(df_score, name_col)
 
-            default_class = ""
-            if class_col:
-                for s in students:
-                    sr = get_student_row(df_score, name_col, s)
-                    v = str(sr.get(class_col, "")).strip()
-                    if v and v.lower() != "nan":
-                        default_class = v
-                        break
+        default_class = ""
+        if class_col:
+            for s in students:
+                sr = get_student_row(df_score, name_col, s)
+                v = str(sr.get(class_col, "")).strip()
+                if v and v.lower() != "nan":
+                    default_class = v
+                    break
 
-            class_name = st.text_input("Class 이름(리포트 제목에 표시)", value=default_class or "S2 반")
+        class_name = st.text_input("Class 이름(리포트 제목에 표시)", value=default_class or "S2 반", key="t1_class")
 
-            # ✅ 폰트 로드도 Tab1 내부에서만 (Tab2에 영향 X)
-            pil_fonts = load_pil_fonts()
-            ensure_reportlab_fonts()
+        pil_fonts = load_pil_fonts()
+        ensure_reportlab_fonts()
 
-            m1_wrong_col, m2_wrong_col = find_wrong_cols_in_score(df_score)
-            if not m1_wrong_col or not m2_wrong_col:
-                st.error("점수 엑셀에서 오답 열('M1 틀린문제', 'M2 틀린문제' 등)을 찾지 못했어요.")
-            elif not uploaded_mock_meta:
+        m1_wrong_col, m2_wrong_col = find_wrong_cols_in_score(df_score)
+        if not m1_wrong_col or not m2_wrong_col:
+            st.error("점수 엑셀에서 오답 열('M1 틀린문제', 'M2 틀린문제' 등)을 찾지 못했어요.")
+        else:
+            if not uploaded_mock_meta:
                 st.warning("Mock 메타 파일을 올려야 단원별 정답률(자동 추천)을 계산할 수 있어요.")
             else:
                 meta_df = read_mock_meta(uploaded_mock_meta)
@@ -933,7 +901,7 @@ with tab1:
                     st.session_state["units_by_student"] = {s: [] for s in students}
                 units_by_student = st.session_state["units_by_student"]
 
-                if st.button("자동 추천 다시 적용(전체 학생)", key="btn_reapply_all"):
+                if st.button("자동 추천 다시 적용(전체 학생)", key="t1_apply_all"):
                     for s in students:
                         rec = auto_recommend_topics(topic_acc_by_student.get(s, {}), threshold=threshold)
                         units_by_student[s] = rec
@@ -959,7 +927,7 @@ with tab1:
 
                 st.divider()
 
-                if st.button("학생별 리포트 생성 (PNG + Editable PDF)", type="primary", key="btn_build_reports"):
+                if st.button("학생별 리포트 생성 (PNG + Editable PDF)", type="primary", key="t1_make"):
                     png_files: Dict[str, bytes] = {}
                     pdf_files: Dict[str, bytes] = {}
                     errors = []
@@ -1038,91 +1006,153 @@ with tab1:
                         if preview_img is not None:
                             st.image(preview_img, caption=f"미리보기: {preview_student}", use_container_width=True)
 
-        except Exception as e:
-            st.error(f"Tab1 처리 중 오류: {e}")
 
-
-# -------------------------
-# Tab2: 틀린 유형 분석 (완전 독립)
-# -------------------------
+# =========================================================
+# Tab2: 틀린 유형 분석 (소단원 기준 중복 집계)
+# =========================================================
 with tab2:
     st.subheader("틀린 유형 분석")
-    st.caption("EXPORT Mocktest(학생별 오답번호) + Mock1/2/3 메타(모듈/문항번호/단원) → 학생별로 반복해서 틀린 단원 확인")
+    st.caption("Export Mocktest 파일 + Mock1/2/3 메타(단원코드) → 학생별로 반복해서 틀린 소단원(2회 이상) 표시")
 
-    cA, cB = st.columns([1.2, 1])
-    with cA:
-        uploaded_export_mock = st.file_uploader(
-            "1) EXPORT Mocktest 파일 업로드(.xlsx) (학생별 Mock1/2/3의 M1/M2 틀린문제 컬럼 포함)",
-            type=["xlsx"],
-            key="t2_export_mock",
-        )
-    with cB:
-        overlap_k = st.slider("중복 기준(몇 번 이상 같은 단원을 틀리면 표시?)", 2, 3, 2, 1, key="t2_overlap_k")
+    left, right = st.columns([1.2, 1])
+    with left:
+        uploaded_export_mock = st.file_uploader("1) Export Mocktest 업로드(.xlsx)", type=["xlsx"], key="t2_export_mock")
+    with right:
+        st.write("2) Mock 메타 업로드(각각)")
+        mock1_meta = st.file_uploader("Mock1 메타(.xlsx)", type=["xlsx"], key="t2_meta1")
+        mock2_meta = st.file_uploader("Mock2 메타(.xlsx)", type=["xlsx"], key="t2_meta2")
+        mock3_meta = st.file_uploader("Mock3 메타(.xlsx)", type=["xlsx"], key="t2_meta3")
 
-    st.markdown("#### 2) Mock 메타 업로드 (mock1 / mock2 / mock3)")
-    mcol1, mcol2, mcol3 = st.columns(3)
-    with mcol1:
-        meta1 = st.file_uploader("Mock1 메타 업로드", type=["xlsx"], key="t2_meta1")
-    with mcol2:
-        meta2 = st.file_uploader("Mock2 메타 업로드", type=["xlsx"], key="t2_meta2")
-    with mcol3:
-        meta3 = st.file_uploader("Mock3 메타 업로드", type=["xlsx"], key="t2_meta3")
+    if not uploaded_export_mock:
+        st.info("Export Mocktest 파일을 업로드하면 분석이 시작돼.")
+    else:
+        try:
+            dfm = read_excel_any(uploaded_export_mock)
 
-    if st.button("📊 분석하기", type="primary", key="t2_run"):
-        if not uploaded_export_mock:
-            st.warning("EXPORT Mocktest 파일을 먼저 업로드해줘.")
-        else:
-            try:
-                df_ex, ex_name_col = load_export_mock_excel(uploaded_export_mock)
+            name_col2 = guess_col(dfm, exact=["Name", "이름"], regexes=[r"(학생|student).*이름", r"^name$"])
+            if not name_col2:
+                st.error("Export Mocktest에서 Name/이름 컬럼을 찾지 못했어.")
+                st.stop()
 
-                col_map = detect_mock_wrong_cols_export(df_ex)
-                if not col_map:
-                    st.error(
-                        "EXPORT Mocktest에서 'Mocktest번호 + (M1/M2) + 틀린문제' 컬럼을 찾지 못했어요.\n\n"
-                        "예시:\n- Mocktest1 M1 틀린문제\n- Mocktest1 M2 틀린문제\n- Mocktest2 M1 틀린문제 ..."
-                    )
-                    st.write("현재 컬럼:", list(df_ex.columns))
+            students2 = students_list(dfm, name_col2)
+
+            # 컬럼에서 mock 번호 추출 (Mocktest1/2/3)
+            mock_numbers = detect_mock_numbers_from_columns([str(c) for c in dfm.columns])
+            mock_numbers = [n for n in mock_numbers if n in [1, 2, 3]]
+
+            if not mock_numbers:
+                st.warning(
+                    "Export Mocktest에서 Mocktest 번호(Mocktest1/2/3)를 컬럼명에서 찾지 못했어.\n"
+                    "예) 'Mocktest1 M1 틀린문제', 'Mocktest2 M2 틀린문제' 같은 형태가 필요해."
+                )
+                st.stop()
+
+            # 메타 업로드 매핑
+            meta_upload_map = {1: mock1_meta, 2: mock2_meta, 3: mock3_meta}
+            meta_topic_map_by_mock: Dict[int, Dict[Tuple[int, int], str]] = {}
+
+            missing_meta = []
+            for mn in mock_numbers:
+                if meta_upload_map.get(mn) is None:
+                    missing_meta.append(mn)
+                    continue
+                mdf = read_mock_meta(meta_upload_map[mn])
+                meta_topic_map_by_mock[mn] = build_meta_topic_map_sub(mdf)
+
+            if missing_meta:
+                st.warning(f"⚠️ 메타 파일이 없는 Mock: {missing_meta} (해당 Mock은 집계에서 제외됨)")
+
+            usable_mocks = [mn for mn in mock_numbers if mn in meta_topic_map_by_mock]
+            if not usable_mocks:
+                st.error("사용 가능한 Mock 메타가 하나도 없어. (Mock1/2/3 중 최소 1개는 메타 업로드 필요)")
+                st.stop()
+
+            # 각 mock별 오답 컬럼 찾기
+            mock_wrong_cols: Dict[int, Tuple[str, str]] = {}
+            missing_wrong_cols = []
+            for mn in usable_mocks:
+                m1c, m2c = find_mock_wrong_cols(dfm, mn)
+                if not m1c or not m2c:
+                    missing_wrong_cols.append(mn)
                 else:
-                    meta_files = {1: meta1, 2: meta2, 3: meta3}
-                    meta_maps: Dict[int, Dict[int, Dict[int, Optional[int]]]] = {}
-                    meta_errors = []
+                    mock_wrong_cols[mn] = (m1c, m2c)
 
-                    for mock_no, f in meta_files.items():
-                        if f is None:
-                            continue
-                        try:
-                            mdf = read_mock_meta(f)
-                            meta_maps[mock_no] = meta_to_lookup(mdf)
-                        except Exception as e:
-                            meta_errors.append(f"Mock{mock_no} 메타 읽기 실패: {e}")
+            if missing_wrong_cols:
+                st.warning(
+                    "⚠️ Export Mocktest에서 오답 컬럼을 찾지 못한 Mock이 있어.\n"
+                    f"- 못 찾은 Mock: {missing_wrong_cols}\n\n"
+                    "컬럼명 예시:\n"
+                    "- Mocktest1 M1 틀린문제 / Mocktest1 M2 틀린문제"
+                )
 
-                    if meta_errors:
-                        st.error("메타 파일 오류:\n" + "\n".join(meta_errors))
-                    elif not meta_maps:
-                        st.warning("Mock 메타 파일을 최소 1개 이상 업로드해야 분석할 수 있어요.")
+            usable_mocks = [mn for mn in usable_mocks if mn in mock_wrong_cols]
+            if not usable_mocks:
+                st.error("오답 컬럼을 찾을 수 있는 Mock이 없어. Export Mocktest 컬럼명을 확인해줘.")
+                st.stop()
+
+            # 분석 실행
+            rows_out = []
+            for s in students2:
+                sr = get_student_row(dfm, name_col2, s)
+
+                # subtopic -> 몇 개의 mock에서 등장했는지 카운트(중복용)
+                appear_counter = Counter()
+
+                # mock별 소단원 리스트(표시용)
+                per_mock_list: Dict[int, List[str]] = {}
+
+                for mn in usable_mocks:
+                    m1c, m2c = mock_wrong_cols[mn]
+                    wrong_m1 = set([n for n in parse_wrong_list(sr.get(m1c, "")) if 1 <= n <= 22])
+                    wrong_m2 = set([n for n in parse_wrong_list(sr.get(m2c, "")) if 1 <= n <= 22])
+
+                    mp = meta_topic_map_by_mock[mn]
+
+                    subtopics_this_mock = set()
+                    for q in wrong_m1:
+                        t = mp.get((1, q), "")
+                        if t:
+                            subtopics_this_mock.add(t)
+                    for q in wrong_m2:
+                        t = mp.get((2, q), "")
+                        if t:
+                            subtopics_this_mock.add(t)
+
+                    # 이 mock에서 나온 소단원(중복 제거) -> appear_counter +1
+                    for t in subtopics_this_mock:
+                        appear_counter[t] += 1
+
+                    per_mock_list[mn] = sorted(list(subtopics_this_mock))
+
+                repeated = [(t, c) for t, c in appear_counter.items() if c >= 2]
+                repeated.sort(key=lambda x: (-x[1], x[0]))
+
+                repeated_text = "\n".join([f"{t}  ({c}회)" for t, c in repeated]) if repeated else ""
+
+                out = {"Name": s, "반복 소단원(2회 이상)": repeated_text}
+                for mn in [1, 2, 3]:
+                    if mn in usable_mocks:
+                        out[f"Mock{mn} 틀린 소단원"] = set_to_text_lines(per_mock_list.get(mn, []), max_lines=30)
                     else:
-                        wrong_map_multi = build_wrong_map_from_export_mock(df_ex, ex_name_col, col_map)
+                        out[f"Mock{mn} 틀린 소단원"] = ""
 
-                        students = sorted(
-                            [n for n in df_ex[ex_name_col].dropna().astype(str).str.strip().tolist() if n not in ["", "nan", "평균"]]
-                        )
-                        students = list(dict.fromkeys(students))
+                rows_out.append(out)
 
-                        df_result = compute_overlap_topics_per_student(
-                            students=students,
-                            wrong_map=wrong_map_multi,
-                            meta_maps=meta_maps,
-                            overlap_k=overlap_k,
-                        )
+            result_df = pd.DataFrame(rows_out)
 
-                        st.success("분석 완료!")
-                        st.dataframe(df_result, use_container_width=True)
+            st.success(f"완료! 학생 {len(result_df)}명 / 분석 Mock: {usable_mocks}")
+            st.dataframe(result_df, use_container_width=True, height=520)
 
-                        only_overlap = st.checkbox("중복 단원이 있는 학생만 보기", value=False, key="t2_only_overlap")
-                        if only_overlap:
-                            colname = f"중복으로 틀린 단원({overlap_k}회 이상)"
-                            df2 = df_result[df_result[colname].astype(str).str.strip() != ""].copy()
-                            st.dataframe(df2, use_container_width=True)
+            # 다운로드(CSV)
+            csv_bytes = result_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                "⬇️ 결과 CSV 다운로드",
+                data=csv_bytes,
+                file_name="틀린유형분석_소단원중복.csv",
+                mime="text/csv",
+                key="t2_download_csv",
+            )
 
-            except Exception as e:
-                st.error(f"Tab2 처리 중 오류: {e}")
+        except Exception as e:
+            st.error(f"Tab2 오류: {e}")
+            st.exception(e)
